@@ -23,8 +23,12 @@ subprojects {
     afterEvaluate {
         val androidExtension = project.extensions.findByName("android")
         if (androidExtension != null) {
-            val baseExtension = androidExtension as? com.android.build.gradle.BaseExtension
-            baseExtension?.compileSdkVersion(36)
+            try {
+                val method = androidExtension.javaClass.getMethod("compileSdkVersion", Integer.TYPE)
+                method.invoke(androidExtension, 36)
+            } catch (e: Exception) {
+                project.logger.warn("Could not set compileSdkVersion on project ${project.name} dynamically: ${e.message}")
+            }
         }
     }
 }
