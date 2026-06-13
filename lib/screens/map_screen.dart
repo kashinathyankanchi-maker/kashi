@@ -24,6 +24,21 @@ class _MapScreenState extends State<MapScreen> {
   int _currentIndex = 0;
   int _playbackSpeedMs = 1500;
   List<Map<String, dynamic>> _playbackSteps = [];
+  String _mapStyle = 'dark';
+
+  String _getMapUrlTemplate() {
+    switch (_mapStyle) {
+      case 'roadmap':
+        return 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}';
+      case 'satellite':
+        return 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}';
+      case 'terrain':
+        return 'https://mt1.google.com/vt/lyrs=t&x={x}&y={y}&z={z}';
+      case 'dark':
+      default:
+        return 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+    }
+  }
 
   @override
   void dispose() {
@@ -101,7 +116,34 @@ class _MapScreenState extends State<MapScreen> {
         ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
       for (var call in suspectCalls) {
-        final tRegistry = MockCaseData.towerRegistry[call.towerId];
+        var tRegistry = MockCaseData.towerRegistry[call.towerId];
+        if (tRegistry == null && call.towerId.isNotEmpty && call.towerId != 'TWR-Unknown') {
+          // Fallback coordinate generator near the active case area
+          double baseLat = 40.7600;
+          double baseLng = -73.9600;
+          if (MockCaseData.towerRegistry.isNotEmpty) {
+            final firstTower = MockCaseData.towerRegistry.values.first;
+            baseLat = firstTower['lat'] as double;
+            baseLng = firstTower['lng'] as double;
+          }
+          
+          int hash = 0;
+          for (int i = 0; i < call.towerId.length; i++) {
+            hash = call.towerId.codeUnitAt(i) + ((hash << 5) - hash);
+          }
+          final latOffset = ((hash % 100) / 2000.0);
+          final lngOffset = (((hash >> 8) % 100) / 2000.0);
+          
+          tRegistry = {
+            'name': "${call.towerId} (Estimated)",
+            'lat': baseLat + latOffset,
+            'lng': baseLng + lngOffset,
+          };
+          
+          // Cache it in the registry
+          MockCaseData.towerRegistry[call.towerId] = tRegistry;
+        }
+
         if (tRegistry != null) {
           final lat = tRegistry['lat'] as double;
           final lng = tRegistry['lng'] as double;
@@ -187,7 +229,7 @@ class _MapScreenState extends State<MapScreen> {
             ),
             children: [
               TileLayer(
-                urlTemplate: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                urlTemplate: _getMapUrlTemplate(),
                 userAgentPackageName: 'com.sentinel.forensic',
               ),
               if (pathPoints.isNotEmpty)
@@ -210,7 +252,7 @@ class _MapScreenState extends State<MapScreen> {
             Positioned(
               top: 20,
               left: 20,
-              right: 20,
+              right: 180, // Prevent overlap with map style dropdown
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                 decoration: BoxDecoration(
@@ -232,6 +274,47 @@ class _MapScreenState extends State<MapScreen> {
                 ),
               ),
             ),
+
+          // Map Style Floating Overlay Selector
+          Positioned(
+            top: 20,
+            right: 20,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: TacticalTheme.bgSecondary.withOpacity(0.95),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    "Layer: ",
+                    style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                  DropdownButton<String>(
+                    value: _mapStyle,
+                    dropdownColor: TacticalTheme.bgSecondary,
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    underline: Container(),
+                    isDense: true,
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() => _mapStyle = val);
+                      }
+                    },
+                    items: const [
+                      DropdownMenuItem(value: 'dark', child: Text("Tactical Dark")),
+                      DropdownMenuItem(value: 'roadmap', child: Text("Google Roadmap")),
+                      DropdownMenuItem(value: 'satellite', child: Text("Google Satellite")),
+                      DropdownMenuItem(value: 'terrain', child: Text("Google Terrain")),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
 
           // Timeline HUD panel at the bottom
           if (suspectNum != null && _playbackSteps.isNotEmpty)

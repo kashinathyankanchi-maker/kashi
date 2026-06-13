@@ -200,6 +200,28 @@ class DashboardScreen extends StatelessWidget {
                                       }
                                     },
                                   ),
+                                  const SizedBox(width: 8),
+                                  TextButton.icon(
+                                    icon: const Icon(Icons.cell_tower_rounded, size: 16, color: TacticalTheme.accentCyan),
+                                    label: const Text("Upload Towers", style: TextStyle(fontSize: 12, color: Colors.white70)),
+                                    onPressed: () async {
+                                      FilePickerResult? result = await FilePicker.platform.pickFiles(
+                                        type: FileType.custom,
+                                        allowedExtensions: ['csv'],
+                                        withData: true,
+                                      );
+                                      if (result != null) {
+                                        final file = result.files.single;
+                                        if (file.bytes != null) {
+                                          final csvText = utf8.decode(file.bytes!);
+                                          state.importTowerRegistry(csvText);
+                                        } else if (file.path != null) {
+                                          final csvText = await File(file.path!).readAsString();
+                                          state.importTowerRegistry(csvText);
+                                        }
+                                      }
+                                    },
+                                  ),
                                 ],
                               ),
                             ],
@@ -232,8 +254,32 @@ class DashboardScreen extends StatelessWidget {
                                         ),
                                         cells: [
                                           DataCell(Text(DateFormat('yyyy-MM-dd HH:mm:ss').format(r.timestamp))),
-                                          DataCell(Text(r.caller, style: const TextStyle(color: TacticalTheme.accentCyan, fontWeight: FontWeight.bold))),
-                                          DataCell(Text(r.recipient, style: const TextStyle(color: TacticalTheme.accentCyan, fontWeight: FontWeight.bold))),
+                                          DataCell(
+                                            GestureDetector(
+                                              onTap: () => state.setSelectedNumber(r.caller),
+                                              child: Text(
+                                                r.caller,
+                                                style: const TextStyle(
+                                                  color: TacticalTheme.accentCyan,
+                                                  fontWeight: FontWeight.bold,
+                                                  decoration: TextDecoration.underline,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          DataCell(
+                                            GestureDetector(
+                                              onTap: () => state.setSelectedNumber(r.recipient),
+                                              child: Text(
+                                                r.recipient,
+                                                style: const TextStyle(
+                                                  color: TacticalTheme.accentCyan,
+                                                  fontWeight: FontWeight.bold,
+                                                  decoration: TextDecoration.underline,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
                                           DataCell(Text('${r.durationSec}s')),
                                           DataCell(Text(r.type)),
                                           DataCell(Text(r.towerId)),

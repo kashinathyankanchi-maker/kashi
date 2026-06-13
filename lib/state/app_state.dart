@@ -155,6 +155,44 @@ class AppState with ChangeNotifier {
     notifyListeners();
   }
 
+  // Import uploaded cell tower coordinates registry
+  void importTowerRegistry(String csvText) {
+    final parsed = CsvParserService.parseCsv(csvText);
+    for (var row in parsed) {
+      final idKey = row.keys.firstWhere(
+        (k) => k.toLowerCase() == 'cell_tower_id' || k.toLowerCase() == 'tower_id' || k.toLowerCase() == 'id',
+        orElse: () => '',
+      );
+      final nameKey = row.keys.firstWhere(
+        (k) => k.toLowerCase() == 'tower_name' || k.toLowerCase() == 'name',
+        orElse: () => '',
+      );
+      final latKey = row.keys.firstWhere(
+        (k) => k.toLowerCase() == 'latitude' || k.toLowerCase() == 'lat',
+        orElse: () => '',
+      );
+      final lngKey = row.keys.firstWhere(
+        (k) => k.toLowerCase() == 'longitude' || k.toLowerCase() == 'lng' || k.toLowerCase() == 'lon',
+        orElse: () => '',
+      );
+
+      if (idKey.isNotEmpty && latKey.isNotEmpty && lngKey.isNotEmpty) {
+        final id = row[idKey] ?? '';
+        final name = nameKey.isNotEmpty ? (row[nameKey] ?? '') : 'Tower $id';
+        final lat = double.tryParse(row[latKey] ?? '');
+        final lng = double.tryParse(row[lngKey] ?? '');
+        if (id.isNotEmpty && lat != null && lng != null) {
+          MockCaseData.towerRegistry[id] = {
+            'name': name,
+            'lat': lat,
+            'lng': lng,
+          };
+        }
+      }
+    }
+    notifyListeners();
+  }
+
   // Import uploaded PDF
   void importPdf(List<int> bytes) {
     try {
@@ -178,8 +216,8 @@ class AppState with ChangeNotifier {
     final lines = text.split('\n');
     final List<Map<String, String>> records = [];
     
-    final dateRegex = RegExp(r'\b\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\s+\d{2}:\d{2}:\d{2}\b');
-    final phoneRegex = RegExp(r'\+?\b\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b|\+?\b\d{10,13}\b');
+    final dateRegex = RegExp(r'\b\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[APap][Mm])?\b');
+    final phoneRegex = RegExp(r'\+?\b\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b|\+?\b\d{10,15}\b');
     
     for (var line in lines) {
       final trimmed = line.trim();
@@ -192,10 +230,19 @@ class AppState with ChangeNotifier {
       // Find all phones
       final Iterable<RegExpMatch> phoneMatches = phoneRegex.allMatches(trimmed);
       final List<String> phones = phoneMatches.map((m) => m.group(0) ?? '').toList();
-      if (phones.isEmpty) continue;
       
-      final caller = phones[0];
-      final recipient = phones.length > 1 ? phones[1] : 'Unknown';
+      // Filter out IMEI/IMSI signatures (typically 15-16 digits)
+      final List<String> cleanPhones = [];
+      for (var p in phones) {
+        final digits = p.replaceAll(RegExp(r'\D'), '');
+        if (digits.length >= 7 && digits.length <= 14) {
+          cleanPhones.add(p.trim());
+        }
+      }
+      if (cleanPhones.isEmpty) continue;
+      
+      final caller = cleanPhones[0];
+      final recipient = cleanPhones.length > 1 ? cleanPhones[1] : 'Unknown';
       
       // Duration
       int durationSec = 45;
