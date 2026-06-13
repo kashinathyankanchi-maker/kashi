@@ -21,12 +21,10 @@ subprojects {
 
 subprojects {
     afterEvaluate {
-        if (project.hasProperty("android")) {
-            val android = project.extensions.findByName("android")
-            if (android != null) {
-                val baseExtension = android as? com.android.build.gradle.BaseExtension
-                baseExtension?.compileSdkVersion(36)
-            }
+        val androidExtension = project.extensions.findByName("android")
+        if (androidExtension != null) {
+            val baseExtension = androidExtension as? com.android.build.gradle.BaseExtension
+            baseExtension?.compileSdkVersion(36)
         }
     }
 }
