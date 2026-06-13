@@ -1,6 +1,9 @@
+import 'dart:io' show File;
+import 'dart:convert' show utf8;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:file_picker/file_picker.dart';
 import '../models/models.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
@@ -147,8 +150,59 @@ class DashboardScreen extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text("Call Detail Records (CDR)", 
-                            style: Theme.of(context).textTheme.titleMedium,
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text("Call Detail Records (CDR)", 
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                              Row(
+                                children: [
+                                  TextButton.icon(
+                                    icon: const Icon(Icons.upload_file_rounded, size: 16, color: TacticalTheme.accentCyan),
+                                    label: const Text("Upload CSV", style: TextStyle(fontSize: 12, color: Colors.white70)),
+                                    onPressed: () async {
+                                      FilePickerResult? result = await FilePicker.platform.pickFiles(
+                                        type: FileType.custom,
+                                        allowedExtensions: ['csv'],
+                                        withData: true,
+                                      );
+                                      if (result != null) {
+                                        final file = result.files.single;
+                                        if (file.bytes != null) {
+                                          final csvText = utf8.decode(file.bytes!);
+                                          state.importCdr(csvText);
+                                        } else if (file.path != null) {
+                                          final csvText = await File(file.path!).readAsString();
+                                          state.importCdr(csvText);
+                                        }
+                                      }
+                                    },
+                                  ),
+                                  const SizedBox(width: 8),
+                                  TextButton.icon(
+                                    icon: const Icon(Icons.picture_as_pdf_rounded, size: 16, color: TacticalTheme.accentCyan),
+                                    label: const Text("Upload PDF", style: TextStyle(fontSize: 12, color: Colors.white70)),
+                                    onPressed: () async {
+                                      FilePickerResult? result = await FilePicker.platform.pickFiles(
+                                        type: FileType.custom,
+                                        allowedExtensions: ['pdf'],
+                                        withData: true,
+                                      );
+                                      if (result != null) {
+                                        final file = result.files.single;
+                                        if (file.bytes != null) {
+                                          state.importPdf(file.bytes!);
+                                        } else if (file.path != null) {
+                                          final pdfBytes = await File(file.path!).readAsBytes();
+                                          state.importPdf(pdfBytes);
+                                        }
+                                      }
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
                           const SizedBox(height: 16),
                           state.cdrRecords.isEmpty

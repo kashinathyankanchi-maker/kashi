@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart';
 import '../models/models.dart';
 import '../services/csv_parser.dart';
 import '../services/mock_case.dart';
@@ -152,5 +153,99 @@ class AppState with ChangeNotifier {
     _tdrData[towerId] = parsed.map((m) => TowerDumpRecord.fromMap(m)).toList();
     _selectedTowers.add(towerId);
     notifyListeners();
+  }
+
+  // Import uploaded PDF
+  void importPdf(List<int> bytes) {
+    try {
+      final PdfDocument document = PdfDocument(inputBytes: bytes);
+      final PdfTextExtractor extractor = PdfTextExtractor(document);
+      final String fullText = extractor.extractText();
+      document.dispose();
+      
+      final parsed = _parseCdrFromText(fullText);
+      if (parsed.isNotEmpty) {
+        _cdrRecords = parsed.map((m) => CdrRecord.fromMap(m)).toList();
+        _selectedNumber = "+1-555-0199"; // Default trace to getaway driver
+        notifyListeners();
+      }
+    } catch (err) {
+      print("Error extracting PDF text: $err");
+    }
+  }
+
+  List<Map<String, String>> _parseCdrFromText(String text) {
+    final lines = text.split('\n');
+    final List<Map<String, String>> records = [];
+    
+    final dateRegex = RegExp(r'\b\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\s+\d{2}:\d{2}:\d{2}\b');
+    final phoneRegex = RegExp(r'\+?\b\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b|\+?\b\d{10,13}\b');
+    
+    for (var line in lines) {
+      final trimmed = line.trim();
+      if (trimmed.isEmpty) continue;
+      
+      final dateMatch = dateRegex.firstMatch(trimmed);
+      if (dateMatch == null) continue;
+      final timestamp = dateMatch.group(0) ?? '';
+      
+      // Find all phones
+      final Iterable<RegExpMatch> phoneMatches = phoneRegex.allMatches(trimmed);
+      final List<String> phones = phoneMatches.map((m) => m.group(0) ?? '').toList();
+      if (phones.isEmpty) continue;
+      
+      final caller = phones[0];
+      final recipient = phones.length > 1 ? phones[1] : 'Unknown';
+      
+      // Duration
+      int durationSec = 45;
+      final durationWordMatch = RegExp(r'\b(\d+)\s*(?:s|sec|seconds)\b', caseSensitive: false).firstMatch(trimmed);
+      if (durationWordMatch != null) {
+        durationSec = int.tryParse(durationWordMatch.group(1) ?? '45') ?? 45;
+      } else {
+        final possibleNums = RegExp(r'\b\d{1,4}\b').allMatches(trimmed).map((m) => m.group(0) ?? '').toList();
+        for (var num in possibleNums) {
+          final parsedNum = int.tryParse(num) ?? 0;
+          if (parsedNum > 0 && parsedNum < 7200 && !timestamp.contains(num)) {
+            durationSec = parsedNum;
+            break;
+          }
+        }
+      }
+      
+      // Type
+      String type = 'Voice';
+      if (RegExp(r'\b(SMS|TEXT|MESSAGE|MSG)\b', caseSensitive: false).hasMatch(trimmed)) {
+        type = 'SMS';
+      }
+      
+      // Tower ID
+      String towerId = 'TWR-Unknown';
+      final towerMatch = RegExp(r'\b(TWR-[\w-]+|Cell-[\w-]+)\b', caseSensitive: false).firstMatch(trimmed);
+      if (towerMatch != null) {
+        towerId = towerMatch.group(0) ?? 'TWR-Unknown';
+      } else {
+        // Fallback checks
+        for (var key in MockCaseData.towerRegistry.keys) {
+          if (trimmed.contains(key)) {
+            towerId = key;
+            break;
+          }
+        }
+      }
+      
+      records.add({
+        'Timestamp': timestamp,
+        'Caller': caller,
+        'Recipient': recipient,
+        'Duration_Sec': durationSec.toString(),
+        'Type': type,
+        'Cell_Tower_ID': towerId,
+        'IMEI': 'N/A',
+        'IMSI': 'N/A'
+      });
+    }
+    
+    return records;
   }
 }
