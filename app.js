@@ -1,0 +1,956 @@
+/**
+ * Forensic CDR/TDR/SDR Analyzer - Core Application Script
+ * Manages forensic data state, CSV parsing, interactive mapping, network graphs, 
+ * tower dump intersections, and mobile/desktop UI controls.
+ */
+
+// Global Application State
+const state = {
+  activeTab: 'dashboard',
+  caseName: 'No Active Case',
+  caseDescription: '',
+  cdrRecords: [],
+  tdrData: {}, // map of towerId -> array of records
+  sdrDatabase: [], // array of SDR subscriber objects
+  selectedNumber: null, // active suspect number under investigation
+  
+  // Mapping references
+  map: null,
+  mapMarkers: {},
+  activePathLine: null,
+  playbackMarker: null,
+  playbackInterval: null,
+  playbackIndex: 0,
+  playbackSpeed: 1500, // ms per transition
+  playbackData: [], // chronological call path data
+  isPlaybackPlaying: false,
+
+  // Network graph references
+  network: null,
+  networkData: { nodes: null, edges: null }
+};
+
+// Default center coordinates (New York City area for mock data)
+const MAP_DEFAULT_CENTER = [40.7600, -73.9600];
+const MAP_DEFAULT_ZOOM = 11;
+
+document.addEventListener('DOMContentLoaded', () => {
+  initUI();
+  initMap();
+  
+  // Auto-load Mock Data on startup to wow the user immediately
+  loadMockCase();
+});
+
+/**
+ * Initialize UI listeners and navigation
+ */
+function initUI() {
+  // Sidebar tab switching
+  const menuItems = document.querySelectorAll('.menu-item');
+  menuItems.forEach(item => {
+    item.addEventListener('click', () => {
+      const tabId = item.getAttribute('data-tab');
+      switchTab(tabId);
+    });
+  });
+
+  // Setup file input change listeners
+  document.getElementById('cdr-file').addEventListener('change', (e) => handleCsvUpload(e, 'cdr'));
+  document.getElementById('sdr-file').addEventListener('change', (e) => handleCsvUpload(e, 'sdr'));
+  document.getElementById('tdr-file').addEventListener('change', (e) => handleCsvUpload(e, 'tdr'));
+
+  // Trigger file dialogs on zone clicks
+  document.querySelectorAll('.upload-zone').forEach(zone => {
+    zone.addEventListener('click', (e) => {
+      // Don't click file input if click was directly on input (avoids double fire)
+      if (e.target.tagName !== 'INPUT') {
+        const input = zone.querySelector('input[type="file"]');
+        if (input) input.click();
+      }
+    });
+  });
+
+  // SDR search button
+  document.getElementById('sdr-search-btn').addEventListener('click', performSdrSearch);
+  document.getElementById('sdr-search-input').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') performSdrSearch();
+  });
+
+  // Tower intersection button
+  document.getElementById('run-intersection-btn').addEventListener('click', runTowerIntersection);
+
+  // Playback control buttons
+  document.getElementById('play-btn').addEventListener('click', togglePlayback);
+  document.getElementById('prev-btn').addEventListener('click', prevPlaybackStep);
+  document.getElementById('next-btn').addEventListener('click', nextPlaybackStep);
+  document.getElementById('speed-select').addEventListener('change', (e) => {
+    state.playbackSpeed = parseInt(e.target.value);
+    if (state.isPlaybackPlaying) {
+      pausePlayback();
+      playPlayback();
+    }
+  });
+  document.getElementById('timeline-slider').addEventListener('input', (e) => {
+    jumpToPlaybackStep(parseInt(e.target.value));
+  });
+
+  // Suspect filter clear button
+  document.getElementById('clear-suspect-filter-btn').addEventListener('click', clearSuspectFilter);
+}
+
+/**
+ * Switch navigation tabs
+ */
+function switchTab(tabId) {
+  state.activeTab = tabId;
+  
+  // Update menu highlights
+  document.querySelectorAll('.menu-item').forEach(item => {
+    if (item.getAttribute('data-tab') === tabId) {
+      item.classList.add('active');
+    } else {
+      item.classList.remove('active');
+    }
+  });
+
+  // Update panel displays
+  document.querySelectorAll('.tab-panel').forEach(panel => {
+    if (panel.id === `${tabId}-tab`) {
+      panel.classList.add('active');
+    } else {
+      panel.classList.remove('active');
+    }
+  });
+
+  // Leaflet map needs size recalculations if shown
+  if (tabId === 'map' && state.map) {
+    setTimeout(() => {
+      state.map.invalidateSize();
+      fitMapToMarkers();
+    }, 100);
+  }
+
+  // Network graph needs redraw if shown
+  if (tabId === 'network') {
+    setTimeout(renderNetworkGraph, 100);
+  }
+}
+
+/**
+ * Initialize Leaflet Map
+ */
+function initMap() {
+  try {
+    state.map = L.map('map-container', {
+      zoomControl: true,
+      attributionControl: false
+    }).setView(MAP_DEFAULT_CENTER, MAP_DEFAULT_ZOOM);
+
+    // Dark-mode themed map tiles (CartoDB Dark Matter)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 20
+    }).addTo(state.map);
+  } catch (err) {
+    console.error("Leaflet Map loading failed:", err);
+  }
+}
+
+/**
+ * Helper: Parse CSV String
+ */
+function parseCSV(text) {
+  const lines = text.split(/\r\n|\n/);
+  if (lines.length === 0 || lines[0].trim() === '') return [];
+  
+  const headers = lines[0].split(',').map(h => h.trim().replace(/^["']|["']$/g, ''));
+  const results = [];
+  
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    
+    // Parse commas while respecting quotes
+    let row = [];
+    let insideQuote = false;
+    let entries = [];
+    let currentEntry = '';
+    
+    for (let char of line) {
+      if (char === '"' || char === "'") {
+        insideQuote = !insideQuote;
+      } else if (char === ',' && !insideQuote) {
+        entries.push(currentEntry.trim());
+        currentEntry = '';
+      } else {
+        currentEntry += char;
+      }
+    }
+    entries.push(currentEntry.trim());
+
+    if (entries.length < headers.length) continue;
+    
+    const obj = {};
+    headers.forEach((header, index) => {
+      let val = entries[index] || '';
+      // Remove enclosing quotes
+      val = val.replace(/^["']|["']$/g, '');
+      obj[header] = val;
+    });
+    results.push(obj);
+  }
+  
+  return results;
+}
+
+/**
+ * Handle File Uploads (CDR, TDR, SDR)
+ */
+function handleCsvUpload(event, type) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const text = e.target.result;
+    const parsed = parseCSV(text);
+    
+    if (parsed.length === 0) {
+      alert("Failed to parse file. Please ensure it is a valid CSV.");
+      return;
+    }
+
+    if (type === 'cdr') {
+      state.cdrRecords = parsed;
+      document.getElementById('cdr-file-status').innerHTML = `✓ loaded <strong>${parsed.length}</strong> calls`;
+      processCdrData();
+    } else if (type === 'sdr') {
+      state.sdrDatabase = parsed;
+      document.getElementById('sdr-file-status').innerHTML = `✓ loaded <strong>${parsed.length}</strong> subscribers`;
+      updateDashboardStats();
+    } else if (type === 'tdr') {
+      // Create a simulated tower ID from filename or count
+      const towerId = file.name.split('.')[0] || `TWR-${Math.floor(Math.random() * 1000)}`;
+      state.tdrData[towerId] = parsed;
+      document.getElementById('tdr-file-status').innerHTML = `✓ loaded tower dump <strong>${file.name}</strong> (${parsed.length} records)`;
+      buildTowerIntersectionCheckboxes();
+    }
+    
+    updateDashboardStats();
+  };
+  reader.readAsText(file);
+}
+
+/**
+ * Load Sample Mock Case ("Case Alpha")
+ */
+function loadMockCase() {
+  if (typeof MOCK_DATA === 'undefined') {
+    console.error("Mock data source file not loaded.");
+    return;
+  }
+
+  // Load basic configurations
+  state.caseName = MOCK_DATA.caseName;
+  state.caseDescription = MOCK_DATA.description;
+  
+  // Update DOM case header values
+  document.getElementById('case-title-badge').innerText = state.caseName;
+  document.getElementById('db-case-title').innerText = state.caseName;
+  document.getElementById('db-case-desc').innerText = state.caseDescription;
+  
+  // Load mock CDR
+  state.cdrRecords = parseCSV(MOCK_DATA.cdrCsv);
+  document.getElementById('cdr-file-status').innerHTML = `✓ Sample loaded (<strong>${state.cdrRecords.length}</strong> calls)`;
+
+  // Load mock SDR
+  state.sdrDatabase = MOCK_DATA.sdrDatabase;
+  document.getElementById('sdr-file-status').innerHTML = `✓ Sample database loaded (<strong>${state.sdrDatabase.length}</strong> profiles)`;
+
+  // Load mock TDR
+  state.tdrData = {};
+  MOCK_DATA.tdrTowers.forEach(t => {
+    state.tdrData[t.id] = parseCSV(t.dumpCsv);
+  });
+  document.getElementById('tdr-file-status').innerHTML = `✓ loaded <strong>${MOCK_DATA.tdrTowers.length}</strong> tower dumps`;
+
+  // Process and update displays
+  processCdrData();
+  buildTowerIntersectionCheckboxes();
+  updateDashboardStats();
+
+  // Draw visualizers
+  renderNetworkGraph();
+  loadTowerMarkersOnMap();
+  
+  // Auto select getaway driver suspect John Doe
+  setSuspectUnderInvestigation("+1-555-0199");
+}
+
+/**
+ * Process Call Detail Records
+ */
+function processCdrData() {
+  if (state.cdrRecords.length === 0) return;
+
+  // Build the call log table
+  buildCdrTable();
+  
+  // Extract top contacts metric
+  buildTopContactsList();
+}
+
+/**
+ * Render CDR call log list
+ */
+function buildCdrTable(filterNum = null) {
+  const tbody = document.getElementById('cdr-table-body');
+  tbody.innerHTML = '';
+
+  let records = state.cdrRecords;
+  if (filterNum) {
+    records = records.filter(r => r.Caller === filterNum || r.Recipient === filterNum);
+  }
+
+  records.forEach(r => {
+    const tr = document.createElement('tr');
+    
+    // Highlight if belongs to target suspect
+    const isSuspectCaller = state.selectedNumber && (r.Caller === state.selectedNumber);
+    const isSuspectRecipient = state.selectedNumber && (r.Recipient === state.selectedNumber);
+    
+    if (isSuspectCaller || isSuspectRecipient) {
+      tr.classList.add('highlight-suspect');
+    }
+
+    const callerClass = isSuspectCaller ? 'phone-num suspect' : 'phone-num';
+    const recClass = isSuspectRecipient ? 'phone-num suspect' : 'phone-num';
+
+    tr.innerHTML = `
+      <td class="time-stamp">${r.Timestamp}</td>
+      <td><span class="${callerClass}" onclick="setSuspectUnderInvestigation('${r.Caller}')">${r.Caller}</span></td>
+      <td><span class="${recClass}" onclick="setSuspectUnderInvestigation('${r.Recipient}')">${r.Recipient}</span></td>
+      <td>${r.Duration_Sec}s</td>
+      <td><span class="badge badge-${r.Type.toLowerCase()}">${r.Type}</span></td>
+      <td><span class="badge" style="background: rgba(245, 158, 11, 0.08); color: var(--accent-orange); border: 1px solid rgba(245, 158, 11, 0.25);">${r.Cell_Tower_ID}</span></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+/**
+ * Build list of top contacted phone numbers
+ */
+function buildTopContactsList() {
+  const container = document.getElementById('top-contacts-list');
+  container.innerHTML = '';
+
+  const contactCounts = {};
+  state.cdrRecords.forEach(r => {
+    contactCounts[r.Caller] = (contactCounts[r.Caller] || 0) + 1;
+    contactCounts[r.Recipient] = (contactCounts[r.Recipient] || 0) + 1;
+  });
+
+  // Sort contact list
+  const sorted = Object.entries(contactCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+
+  sorted.forEach(([number, count]) => {
+    // Cross-ref with SDR to find name
+    const sdr = state.sdrDatabase.find(s => s.phone === number);
+    const displayName = sdr ? `${sdr.name} (${sdr.role || 'Associate'})` : 'Unknown Subject';
+
+    const item = document.createElement('div');
+    item.className = 'menu-item';
+    if (state.selectedNumber === number) item.classList.add('active');
+    
+    item.style.justifyContent = 'space-between';
+    item.style.padding = '10px 14px';
+    item.innerHTML = `
+      <div style="display: flex; flex-direction: column; gap: 2px;">
+        <span class="phone-num ${sdr ? 'suspect' : ''}" style="font-size: 0.85rem;">${number}</span>
+        <span style="font-size: 0.7rem; color: var(--text-dim);">${displayName}</span>
+      </div>
+      <span class="badge badge-voice">${count} interactions</span>
+    `;
+    item.addEventListener('click', () => setSuspectUnderInvestigation(number));
+    container.appendChild(item);
+  });
+}
+
+/**
+ * Set target number under investigation
+ */
+function setSuspectUnderInvestigation(number) {
+  state.selectedNumber = number;
+  
+  // Highlight in sidebar/tables
+  document.getElementById('target-suspect-indicator').innerHTML = `
+    Active Suspect: <span class="phone-num suspect" style="font-size: 0.95rem; margin-left: 6px;">${number}</span>
+  `;
+  document.getElementById('clear-suspect-filter-btn').style.display = 'inline-flex';
+
+  // Update call logs, map paths and details
+  buildCdrTable(number);
+  buildTopContactsList();
+  
+  // Sync SDR Tab input and run search
+  document.getElementById('sdr-search-input').value = number;
+  performSdrSearch();
+
+  // Regenerate Map paths and timeline
+  generateSuspectMapPath(number);
+
+  // Redraw Network to highlight active suspect
+  renderNetworkGraph();
+
+  // If on Dashboard, scroll down to the Call table
+  if (state.activeTab === 'dashboard') {
+    // Optionally redirect tab or keep on dashboard
+  }
+}
+
+/**
+ * Clear the current suspect filter
+ */
+function clearSuspectFilter() {
+  state.selectedNumber = null;
+  document.getElementById('target-suspect-indicator').innerHTML = 'Select a phone number to trace';
+  document.getElementById('clear-suspect-filter-btn').style.display = 'none';
+  
+  // Reset lists
+  buildCdrTable();
+  buildTopContactsList();
+  
+  // Reset Map
+  clearPlayback();
+  if (state.activePathLine) {
+    state.map.removeLayer(state.activePathLine);
+    state.activePathLine = null;
+  }
+  
+  renderNetworkGraph();
+}
+
+/**
+ * Update Dashboard Stats Cards
+ */
+function updateDashboardStats() {
+  // Total CDR calls
+  document.getElementById('stat-total-calls').innerText = state.cdrRecords.length;
+  
+  // Unique suspects count (from SDR database)
+  document.getElementById('stat-suspects-count').innerText = state.sdrDatabase.length;
+
+  // Active Tower locations count
+  const towers = new Set();
+  state.cdrRecords.forEach(c => { if(c.Cell_Tower_ID) towers.add(c.Cell_Tower_ID); });
+  Object.keys(state.tdrData).forEach(t => towers.add(t));
+  document.getElementById('stat-towers-count').innerText = towers.size;
+
+  // Overlaps count
+  document.getElementById('stat-overlaps-count').innerText = Object.keys(state.tdrData).length;
+}
+
+/**
+ * Vis.js Network Graph Drawer
+ */
+function renderNetworkGraph() {
+  const container = document.getElementById('network-container');
+  if (!container || state.cdrRecords.length === 0) return;
+
+  const nodesMap = {};
+  const edgesMap = {};
+
+  // Extract unique nodes and links from calls
+  state.cdrRecords.forEach(call => {
+    const caller = call.Caller;
+    const recipient = call.Recipient;
+
+    if (!nodesMap[caller]) {
+      const sdr = state.sdrDatabase.find(s => s.phone === caller);
+      nodesMap[caller] = {
+        id: caller,
+        label: sdr ? `${sdr.name}\n${caller}` : caller,
+        color: caller === state.selectedNumber ? '#ef4444' : (sdr ? '#f59e0b' : '#06b6d4'),
+        font: { color: '#f8fafc', size: 12, face: 'Inter' },
+        shape: 'dot',
+        size: caller === state.selectedNumber ? 22 : (sdr ? 16 : 12),
+        borderWidth: 2,
+        title: sdr ? `Suspect: ${sdr.name}\nRole: ${sdr.role || 'Unspecified'}` : `Call contact: ${caller}`
+      };
+    }
+
+    if (!nodesMap[recipient]) {
+      const sdr = state.sdrDatabase.find(s => s.phone === recipient);
+      nodesMap[recipient] = {
+        id: recipient,
+        label: sdr ? `${sdr.name}\n${recipient}` : recipient,
+        color: recipient === state.selectedNumber ? '#ef4444' : (sdr ? '#f59e0b' : '#06b6d4'),
+        font: { color: '#f8fafc', size: 12, face: 'Inter' },
+        shape: 'dot',
+        size: recipient === state.selectedNumber ? 22 : (sdr ? 16 : 12),
+        borderWidth: 2,
+        title: sdr ? `Suspect: ${sdr.name}\nRole: ${sdr.role || 'Unspecified'}` : `Call contact: ${recipient}`
+      };
+    }
+
+    // Connect them
+    const edgeId = [caller, recipient].sort().join('-');
+    if (!edgesMap[edgeId]) {
+      edgesMap[edgeId] = {
+        from: caller,
+        to: recipient,
+        value: 1,
+        color: { color: '#334155', highlight: '#06b6d4' }
+      };
+    } else {
+      edgesMap[edgeId].value += 1;
+    }
+  });
+
+  const nodes = new vis.DataSet(Object.values(nodesMap));
+  const edges = new vis.DataSet(Object.values(edgesMap));
+
+  const data = { nodes, edges };
+  const options = {
+    nodes: {
+      scaling: { min: 10, max: 30 }
+    },
+    edges: {
+      scaling: { min: 1, max: 8 },
+      smooth: { type: 'continuous' }
+    },
+    physics: {
+      barnesHut: {
+        gravitationalConstant: -2000,
+        centralGravity: 0.3,
+        springLength: 95
+      }
+    },
+    interaction: {
+      hover: true,
+      tooltipDelay: 200
+    }
+  };
+
+  // Build the network
+  state.network = new vis.Network(container, data, options);
+
+  // Click handler to trace node
+  state.network.on("click", (params) => {
+    if (params.nodes.length > 0) {
+      const selectedNode = params.nodes[0];
+      setSuspectUnderInvestigation(selectedNode);
+    }
+  });
+}
+
+/**
+ * TDR: Populate tower dumps selection list
+ */
+function buildTowerIntersectionCheckboxes() {
+  const container = document.getElementById('tower-intersection-list');
+  container.innerHTML = '';
+
+  const towerIds = Object.keys(state.tdrData);
+  if (towerIds.length === 0) {
+    container.innerHTML = `<span style="color: var(--text-dim); font-size: 0.85rem;">No tower dumps loaded.</span>`;
+    return;
+  }
+
+  towerIds.forEach(id => {
+    const label = document.createElement('label');
+    label.className = 'tower-checkbox-item';
+    
+    // Cross check names if available in mock data registry
+    let towerName = id;
+    if (typeof MOCK_DATA !== 'undefined' && MOCK_DATA.towerRegistry[id]) {
+      towerName = `${MOCK_DATA.towerRegistry[id].name} (${id})`;
+    }
+
+    label.innerHTML = `
+      <input type="checkbox" name="tower-select" value="${id}" checked>
+      <span>${towerName}</span>
+      <span class="overlap-stat">${state.tdrData[id].length} SIMs</span>
+    `;
+    container.appendChild(label);
+  });
+}
+
+/**
+ * TDR: Execute intersection of numbers present in multiple towers
+ */
+function runTowerIntersection() {
+  const checkedCheckboxes = document.querySelectorAll('input[name="tower-select"]:checked');
+  const selectedTowers = Array.from(checkedCheckboxes).map(cb => cb.value);
+
+  const resultsDiv = document.getElementById('intersection-results-area');
+  const resultsTbody = document.getElementById('intersection-table-body');
+  resultsTbody.innerHTML = '';
+
+  if (selectedTowers.length < 2) {
+    resultsDiv.style.display = 'none';
+    alert("Please select at least 2 towers to compute intersection overlaps.");
+    return;
+  }
+
+  // Find overlap
+  const phonePresence = {}; // phone -> set of towerIds
+  
+  selectedTowers.forEach(tId => {
+    const records = state.tdrData[tId] || [];
+    records.forEach(rec => {
+      const phone = rec.Phone_Number;
+      if (!phonePresence[phone]) {
+        phonePresence[phone] = new Set();
+      }
+      phonePresence[phone].add(tId);
+    });
+  });
+
+  // Filter numbers present in ALL selected towers
+  const intersectionResults = [];
+  Object.entries(phonePresence).forEach(([phone, presenceSet]) => {
+    if (presenceSet.size === selectedTowers.length) {
+      // Find detail records for this number (timestamps and signals)
+      const details = [];
+      selectedTowers.forEach(tId => {
+        const found = state.tdrData[tId].filter(r => r.Phone_Number === phone);
+        found.forEach(f => {
+          details.push({ tower: tId, time: f.Timestamp, signal: f.Signal_DBm });
+        });
+      });
+      
+      intersectionResults.push({
+        phone,
+        matchCount: presenceSet.size,
+        details
+      });
+    }
+  });
+
+  if (intersectionResults.length === 0) {
+    resultsDiv.style.display = 'block';
+    resultsTbody.innerHTML = `
+      <tr>
+        <td colspan="4" style="text-align: center; color: var(--text-dim); padding: 32px 0;">
+          No matching phone numbers found in all ${selectedTowers.length} selected tower dumps.
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  // Populate results
+  intersectionResults.forEach(res => {
+    // Cross ref SDR
+    const sdr = state.sdrDatabase.find(s => s.phone === res.phone);
+    const nameStr = sdr ? sdr.name : 'Unknown';
+    const roleStr = sdr ? `<span class="badge badge-suspect">${sdr.role || 'Suspect'}</span>` : '<span class="badge" style="background: rgba(255,255,255,0.05);">No SDR Record</span>';
+
+    const tr = document.createElement('tr');
+    tr.className = 'highlight-suspect'; // High highlight to show they matched all scenes
+    tr.innerHTML = `
+      <td>
+        <span class="phone-num suspect" onclick="setSuspectUnderInvestigation('${res.phone}')">${res.phone}</span>
+      </td>
+      <td><strong>${nameStr}</strong></td>
+      <td>${roleStr}</td>
+      <td>
+        <span class="badge" style="background: rgba(16, 185, 129, 0.12); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.25);">
+          All ${res.matchCount} Towers Matched
+        </span>
+      </td>
+    `;
+    resultsTbody.appendChild(tr);
+  });
+
+  resultsDiv.style.display = 'block';
+  
+  // Update overlay stats count on dashboard
+  document.getElementById('stat-overlaps-count').innerText = intersectionResults.length;
+}
+
+/**
+ * SDR: Search subscriber directory
+ */
+function performSdrSearch() {
+  const query = document.getElementById('sdr-search-input').value.trim();
+  const cardContainer = document.getElementById('sdr-profile-container');
+  const detailsDiv = document.getElementById('sdr-profile-details');
+  const emptyDiv = document.getElementById('sdr-profile-empty');
+  
+  if (!query) {
+    detailsDiv.style.display = 'none';
+    emptyDiv.style.display = 'flex';
+    return;
+  }
+
+  // Find by phone, name, or alternate phone
+  const match = state.sdrDatabase.find(s => 
+    s.phone.includes(query) || 
+    s.name.toLowerCase().includes(query.toLowerCase()) || 
+    (s.alternatePhone && s.alternatePhone.includes(query))
+  );
+
+  if (!match) {
+    detailsDiv.style.display = 'none';
+    emptyDiv.style.display = 'flex';
+    emptyDiv.querySelector('.empty-state-title').innerText = "No Subscriber Record Found";
+    emptyDiv.querySelector('.empty-state-desc').innerText = `No matches for '${query}' in the current SDR directory database.`;
+    return;
+  }
+
+  // Populate details card
+  emptyDiv.style.display = 'none';
+  detailsDiv.style.display = 'block';
+
+  document.getElementById('sdr-val-name').innerText = match.name;
+  document.getElementById('sdr-val-phone').innerText = match.phone;
+  document.getElementById('sdr-val-age').innerText = `${match.age || 'N/A'} / ${match.gender || 'N/A'}`;
+  document.getElementById('sdr-val-id').innerText = `${match.idType || 'ID Proof'}: ${match.idNumber || 'N/A'}`;
+  document.getElementById('sdr-val-address').innerText = match.address || 'Address Unknown';
+  document.getElementById('sdr-val-activation').innerText = match.activationDate || 'N/A';
+  document.getElementById('sdr-val-alternate').innerText = match.alternatePhone || 'None Registered';
+  document.getElementById('sdr-val-notes').innerText = match.notes || 'No notes compiled.';
+
+  // Draw custom avatar silhouette
+  const avatarBox = document.getElementById('sdr-profile-avatar-svg');
+  // Simple custom avatar generation based on name
+  const isFemale = match.gender && match.gender.toLowerCase() === 'female';
+  avatarBox.innerHTML = isFemale ? 
+    `<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3 0 1.25-.76 2.32-1.85 2.77C14.07 11.23 15 12.5 15 14h-6c0-1.5.93-2.77 1.85-3.23C9.76 10.32 9 9.25 9 8c0-1.66 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08s5.97 1.09 6 3.08c-1.29 1.94-3.5 3.22-6 3.22z" fill="#ec4899"/>` : 
+    `<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08s5.97 1.09 6 3.08c-1.29 1.94-3.5 3.22-6 3.22z" fill="#0ea5e9"/>`;
+
+  // Update investigative title/role
+  const roleTitle = document.getElementById('sdr-val-role');
+  roleTitle.innerText = match.role || 'Subject of Investigation';
+  if (match.role && match.role.toLowerCase().includes('suspect')) {
+    roleTitle.style.background = 'rgba(239, 68, 68, 0.15)';
+    roleTitle.style.color = '#ef4444';
+    roleTitle.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+  } else {
+    roleTitle.style.background = 'rgba(255, 255, 255, 0.05)';
+    roleTitle.style.color = 'var(--text-main)';
+    roleTitle.style.border = '1px solid var(--border-color)';
+  }
+}
+
+/**
+ * GIS Map: Load tower marker hubs on map
+ */
+function loadTowerMarkersOnMap() {
+  if (!state.map) return;
+
+  // Clear existing markers
+  Object.values(state.mapMarkers).forEach(m => state.map.removeLayer(m));
+  state.mapMarkers = {};
+
+  const towersRegistry = (typeof MOCK_DATA !== 'undefined') ? MOCK_DATA.towerRegistry : {};
+
+  Object.entries(towersRegistry).forEach(([id, t]) => {
+    // Custom pulsing marker icon using HTML/CSS
+    const customIcon = L.divIcon({
+      html: `<div class="pulse-ring"></div><div style="background-color: var(--accent-orange); width: 10px; height: 10px; border-radius: 50%;"></div>`,
+      className: 'tower-map-marker',
+      iconSize: [24, 24]
+    });
+
+    const marker = L.marker([t.lat, t.lng], { icon: customIcon }).addTo(state.map);
+    
+    // Bind detailed popup
+    marker.bindPopup(`
+      <div style="color: var(--text-main); font-family: 'Inter', sans-serif;">
+        <h4 style="color: var(--accent-orange); margin-bottom: 4px;">Cell Tower Hub</h4>
+        <strong>${t.name}</strong><br>
+        Tower ID: <code style="color: var(--accent-cyan); font-family: 'Fira Code';">${id}</code><br>
+        Location: <code>${t.lat.toFixed(4)}, ${t.lng.toFixed(4)}</code>
+      </div>
+    `);
+
+    state.mapMarkers[id] = marker;
+  });
+
+  fitMapToMarkers();
+}
+
+/**
+ * Fit Map view bounds to tower markers
+ */
+function fitMapToMarkers() {
+  if (!state.map) return;
+  const markers = Object.values(state.mapMarkers);
+  if (markers.length === 0) return;
+
+  const group = new L.featureGroup(markers);
+  state.map.fitBounds(group.getBounds().pad(0.15));
+}
+
+/**
+ * GIS Map: Draw travel route path of suspect based on chronologic cell tower connects
+ */
+function generateSuspectMapPath(number) {
+  if (!state.map) return;
+
+  // Clear previous paths/markers
+  clearPlayback();
+  if (state.activePathLine) {
+    state.map.removeLayer(state.activePathLine);
+    state.activePathLine = null;
+  }
+
+  // Get chronological calls involving this number
+  const timelineCalls = state.cdrRecords
+    .filter(r => r.Caller === number || r.Recipient === number)
+    .sort((a, b) => new Date(a.Timestamp) - new Date(b.Timestamp));
+
+  if (timelineCalls.length === 0) {
+    document.getElementById('map-timeline-panel').style.display = 'none';
+    return;
+  }
+
+  const towersRegistry = (typeof MOCK_DATA !== 'undefined') ? MOCK_DATA.towerRegistry : {};
+  const latlngs = [];
+  const validPlaybackSteps = [];
+
+  timelineCalls.forEach(call => {
+    const tId = call.Cell_Tower_ID;
+    const tower = towersRegistry[tId];
+    if (tower) {
+      const coord = [tower.lat, tower.lng];
+      latlngs.push(coord);
+      validPlaybackSteps.push({
+        coord,
+        time: call.Timestamp,
+        towerName: tower.name,
+        towerId: tId,
+        type: call.Type,
+        recipient: call.Caller === number ? call.Recipient : call.Caller,
+        direction: call.Caller === number ? 'Outgoing' : 'Incoming'
+      });
+    }
+  });
+
+  if (latlngs.length < 2) {
+    document.getElementById('map-timeline-panel').style.display = 'none';
+    return;
+  }
+
+  // Draw dashed trace polyline
+  state.activePathLine = L.polyline(latlngs, {
+    color: '#06b6d4',
+    weight: 3,
+    dashArray: '8, 8',
+    opacity: 0.75
+  }).addTo(state.map);
+
+  // Setup playback details
+  state.playbackData = validPlaybackSteps;
+  state.playbackIndex = 0;
+  
+  // Show play bar overlay
+  document.getElementById('map-timeline-panel').style.display = 'flex';
+  
+  // Set slider boundaries
+  const slider = document.getElementById('timeline-slider');
+  slider.max = validPlaybackSteps.length - 1;
+  slider.value = 0;
+  
+  // Show initial position
+  jumpToPlaybackStep(0);
+}
+
+/**
+ * Map Timeline Playback: Jump to step
+ */
+function jumpToPlaybackStep(index) {
+  if (index < 0 || index >= state.playbackData.length) return;
+  state.playbackIndex = index;
+
+  const step = state.playbackData[index];
+  
+  // Update slider position
+  document.getElementById('timeline-slider').value = index;
+
+  // Update text labels
+  document.getElementById('timeline-time').innerText = step.time;
+  document.getElementById('timeline-tower-info').innerText = `${step.towerName} (${step.towerId})`;
+  document.getElementById('timeline-desc').innerHTML = `
+    ${step.direction} ${step.type} call to/from <strong class="phone-num" style="color:#f8fafc;">${step.recipient}</strong>
+  `;
+
+  // Draw or update moving target marker
+  if (!state.playbackMarker) {
+    const radarIcon = L.divIcon({
+      html: `<div style="background-color: var(--accent-red); width: 14px; height: 14px; border-radius: 50%; border: 2px solid #ffffff; box-shadow: 0 0 10px rgba(239,68,68,0.8); z-index: 999;"></div>`,
+      className: 'target-playback-marker',
+      iconSize: [14, 14]
+    });
+    state.playbackMarker = L.marker(step.coord, { icon: radarIcon }).addTo(state.map);
+  } else {
+    state.playbackMarker.setLatLng(step.coord);
+  }
+
+  // Pan map to follow
+  state.map.panTo(step.coord);
+}
+
+/**
+ * Toggle map play/pause
+ */
+function togglePlayback() {
+  if (state.isPlaybackPlaying) {
+    pausePlayback();
+  } else {
+    playPlayback();
+  }
+}
+
+function playPlayback() {
+  if (state.playbackData.length === 0) return;
+  state.isPlaybackPlaying = true;
+  document.getElementById('play-btn').innerHTML = '⏸ Pause';
+
+  state.playbackInterval = setInterval(() => {
+    let nextIndex = state.playbackIndex + 1;
+    if (nextIndex >= state.playbackData.length) {
+      nextIndex = 0; // loop back
+    }
+    jumpToPlaybackStep(nextIndex);
+  }, state.playbackSpeed);
+}
+
+function pausePlayback() {
+  state.isPlaybackPlaying = false;
+  document.getElementById('play-btn').innerHTML = '▶ Play';
+  if (state.playbackInterval) {
+    clearInterval(state.playbackInterval);
+    state.playbackInterval = null;
+  }
+}
+
+function prevPlaybackStep() {
+  pausePlayback();
+  let index = state.playbackIndex - 1;
+  if (index < 0) index = state.playbackData.length - 1;
+  jumpToPlaybackStep(index);
+}
+
+function nextPlaybackStep() {
+  pausePlayback();
+  let index = state.playbackIndex + 1;
+  if (index >= state.playbackData.length) index = 0;
+  jumpToPlaybackStep(index);
+}
+
+function clearPlayback() {
+  pausePlayback();
+  if (state.playbackMarker) {
+    state.map.removeLayer(state.playbackMarker);
+    state.playbackMarker = null;
+  }
+  state.playbackData = [];
+  state.playbackIndex = 0;
+}
