@@ -59,7 +59,16 @@ function initUI() {
   document.getElementById('cdr-file').addEventListener('change', (e) => handleCsvUpload(e, 'cdr'));
   document.getElementById('sdr-file').addEventListener('change', (e) => handleCsvUpload(e, 'sdr'));
   document.getElementById('tdr-file').addEventListener('change', (e) => handleCsvUpload(e, 'tdr'));
+  document.getElementById('tower-file').addEventListener('change', (e) => handleCsvUpload(e, 'tower-registry'));
   document.getElementById('cdr-pdf-file').addEventListener('change', handlePdfUpload);
+
+  // Map style dropdown listener
+  const styleSelect = document.getElementById('map-style-select');
+  if (styleSelect) {
+    styleSelect.addEventListener('change', (e) => {
+      setMapStyle(e.target.value);
+    });
+  }
 
   // Trigger file dialogs on zone clicks
   document.querySelectorAll('.upload-zone').forEach(zone => {
@@ -148,13 +157,31 @@ function initMap() {
       attributionControl: false
     }).setView(MAP_DEFAULT_CENTER, MAP_DEFAULT_ZOOM);
 
-    // Dark-mode themed map tiles (CartoDB Dark Matter)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    // Keep reference to tileLayer in state
+    state.tileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
       maxZoom: 20
     }).addTo(state.map);
   } catch (err) {
     console.error("Leaflet Map loading failed:", err);
   }
+}
+
+function setMapStyle(style) {
+  if (!state.map || !state.tileLayer) return;
+  state.map.removeLayer(state.tileLayer);
+  
+  let urlTemplate = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+  if (style === 'roadmap') {
+    urlTemplate = 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}';
+  } else if (style === 'satellite') {
+    urlTemplate = 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}';
+  } else if (style === 'terrain') {
+    urlTemplate = 'https://mt1.google.com/vt/lyrs=t&x={x}&y={y}&z={z}';
+  }
+  
+  state.tileLayer = L.tileLayer(urlTemplate, {
+    maxZoom: 20
+  }).addTo(state.map);
 }
 
 /**
@@ -234,6 +261,39 @@ function handleCsvUpload(event, type) {
       const towerId = file.name.split('.')[0] || `TWR-${Math.floor(Math.random() * 1000)}`;
       state.tdrData[towerId] = parsed;
       document.getElementById('tdr-file-status').innerHTML = `✓ loaded tower dump <strong>${file.name}</strong> (${parsed.length} records)`;
+      buildTowerIntersectionCheckboxes();
+    } else if (type === 'tower-registry') {
+      if (typeof MOCK_DATA === 'undefined') {
+        MOCK_DATA = { towerRegistry: {} };
+      }
+      if (!MOCK_DATA.towerRegistry) {
+        MOCK_DATA.towerRegistry = {};
+      }
+      parsed.forEach(row => {
+        const idKey = Object.keys(row).find(k => k.toLowerCase() === 'cell_tower_id' || k.toLowerCase() === 'tower_id' || k.toLowerCase() === 'id');
+        const nameKey = Object.keys(row).find(k => k.toLowerCase() === 'tower_name' || k.toLowerCase() === 'name');
+        const latKey = Object.keys(row).find(k => k.toLowerCase() === 'latitude' || k.toLowerCase() === 'lat');
+        const lngKey = Object.keys(row).find(k => k.toLowerCase() === 'longitude' || k.toLowerCase() === 'lng' || k.toLowerCase() === 'lon');
+        
+        if (idKey && latKey && lngKey) {
+          const id = row[idKey];
+          const name = nameKey ? row[nameKey] : `Tower ${id}`;
+          const lat = parseFloat(row[latKey]);
+          const lng = parseFloat(row[lngKey]);
+          if (!isNaN(lat) && !isNaN(lng)) {
+            MOCK_DATA.towerRegistry[id] = {
+              name: name,
+              lat: lat,
+              lng: lng
+            };
+          }
+        }
+      });
+      document.getElementById('tower-file-status').innerHTML = `✓ loaded <strong>${Object.keys(MOCK_DATA.towerRegistry).length}</strong> towers`;
+      loadTowerMarkersOnMap();
+      if (state.selectedNumber) {
+        generateSuspectMapPath(state.selectedNumber);
+      }
       buildTowerIntersectionCheckboxes();
     }
     
@@ -818,7 +878,52 @@ function generateSuspectMapPath(number) {
 
   timelineCalls.forEach(call => {
     const tId = call.Cell_Tower_ID;
-    const tower = towersRegistry[tId];
+    let tower = towersRegistry[tId];
+    
+    // Fallback coordinate generator for unknown towers
+    if (!tower && tId && tId !== 'TWR-Unknown') {
+      let baseLat = MAP_DEFAULT_CENTER[0];
+      let baseLng = MAP_DEFAULT_CENTER[1];
+      const existingTowers = Object.values(towersRegistry);
+      if (existingTowers.length > 0) {
+        baseLat = existingTowers[0].lat;
+        baseLng = existingTowers[0].lng;
+      }
+      
+      let hash = 0;
+      for (let i = 0; i < tId.length; i++) {
+        hash = tId.charCodeAt(i) + ((hash << 5) - hash);
+      }
+      const latOffset = ((hash % 100) / 2000);
+      const lngOffset = (((hash >> 8) % 100) / 2000);
+      
+      tower = {
+        name: `${tId} (Estimated)`,
+        lat: baseLat + latOffset,
+        lng: baseLng + lngOffset
+      };
+      
+      towersRegistry[tId] = tower;
+      
+      if (state.map && !state.mapMarkers[tId]) {
+        const customIcon = L.divIcon({
+          html: `<div class="pulse-ring" style="border-color: var(--accent-cyan);"></div><div style="background-color: var(--accent-cyan); width: 10px; height: 10px; border-radius: 50%;"></div>`,
+          className: 'tower-map-marker',
+          iconSize: [24, 24]
+        });
+        const marker = L.marker([tower.lat, tower.lng], { icon: customIcon }).addTo(state.map);
+        marker.bindPopup(`
+          <div style="color: var(--text-main); font-family: 'Inter', sans-serif;">
+            <h4 style="color: var(--accent-cyan); margin-bottom: 4px;">Estimated Tower Hub</h4>
+            <strong>${tower.name}</strong><br>
+            Tower ID: <code style="color: var(--accent-cyan); font-family: 'Fira Code';">${tId}</code><br>
+            Location: <code>${tower.lat.toFixed(4)}, ${tower.lng.toFixed(4)}</code>
+          </div>
+        `);
+        state.mapMarkers[tId] = marker;
+      }
+    }
+
     if (tower) {
       const coord = [tower.lat, tower.lng];
       latlngs.push(coord);
@@ -1020,11 +1125,11 @@ function parseCdrFromText(text) {
   const lines = text.split('\n');
   const records = [];
   
-  // Date time matching: YYYY-MM-DD HH:MM:SS or DD-MM-YYYY HH:MM:SS (supporting space separation)
-  const dateRegex = /\b\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\s+\d{2}:\d{2}:\d{2}\b/;
+  // Date time matching: YYYY-MM-DD HH:MM:SS, DD-MM-YYYY HH:MM, etc., with optional seconds and AM/PM
+  const dateRegex = /\b\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[APap][Mm])?\b/;
   
   // Phone numbers matching (at least 7 to 15 digits, optional + prefix, allowing hyphens/spaces)
-  const phoneRegex = /\+?\b\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b|\+?\b\d{10,13}\b/g;
+  const phoneRegex = /\+?\b\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b|\+?\b\d{10,15}\b/g;
 
   lines.forEach(line => {
     const trimmed = line.trim();
@@ -1040,8 +1145,18 @@ function parseCdrFromText(text) {
     const phones = trimmed.match(phoneRegex) || [];
     if (phones.length === 0) return;
     
-    const caller = phones[0];
-    const recipient = phones.length > 1 ? phones[1] : 'Unknown';
+    // Filter out IMEI/IMSI numbers (typically 15-16 digits)
+    const cleanPhones = [];
+    phones.forEach(p => {
+      const digits = p.replace(/\D/g, ''); // get digits only
+      if (digits.length >= 7 && digits.length <= 14) {
+        cleanPhones.push(p.trim());
+      }
+    });
+    
+    if (cleanPhones.length === 0) return;
+    const caller = cleanPhones[0];
+    const recipient = cleanPhones.length > 1 ? cleanPhones[1] : 'Unknown';
     
     // Scan for call duration
     let durationSec = 45; // default fallback

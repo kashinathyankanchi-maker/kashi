@@ -219,6 +219,20 @@
               <div id="sdr-file-status" style="font-size: 0.75rem; color: var(--text-dim); text-align: center;">No SDR directory loaded</div>
             </div>
 
+            <!-- Tower Registry Panel -->
+            <div class="forensic-card">
+              <h3 class="forensic-card-title">Import Cell Tower Registry</h3>
+              <div class="upload-zone" id="tower-upload-zone">
+                <svg class="upload-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div class="upload-text">Upload <span>Cell Towers CSV</span></div>
+                <div class="upload-hint">Upload Tower ID, Name, Lat, Lng</div>
+                <input type="file" id="tower-file" class="file-input" accept=".csv" />
+              </div>
+              <div id="tower-file-status" style="font-size: 0.75rem; color: var(--text-dim); text-align: center;">No custom towers loaded</div>
+            </div>
+
           </div>
         </div>
 
@@ -238,6 +252,17 @@
           <!-- Map Box -->
           <div style="position: relative; flex: 1;">
             <div id="map-container"></div>
+            
+            <!-- Map Layer Select Dropdown Overlay -->
+            <div class="map-style-control" style="position: absolute; top: 12px; right: 12px; z-index: 1000; background: rgba(10, 14, 23, 0.95); border: 1px solid var(--border-color); padding: 8px 12px; border-radius: 8px; display: flex; gap: 8px; align-items: center; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.55); backdrop-filter: blur(8px);">
+              <label for="map-style-select" style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; margin-right: 4px;">Map Layer:</label>
+              <select id="map-style-select" style="background: var(--bg-secondary); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 4px; padding: 4px 8px; font-size: 0.75rem; cursor: pointer; outline: none;">
+                <option value="dark">Tactical Dark (Default)</option>
+                <option value="roadmap">Google Roadmap</option>
+                <option value="satellite">Google Satellite</option>
+                <option value="terrain">Google Terrain</option>
+              </select>
+            </div>
             
             <!-- Map Playback Timeline Overlay -->
             <div class="map-timeline-control" id="map-timeline-panel" style="display: none;">
