@@ -144,6 +144,10 @@
                   Upload CDR CSV
                   <input type="file" id="cdr-file" class="file-input" accept=".csv" />
                 </label>
+                <label class="btn btn-primary" style="font-size: 0.75rem; cursor: pointer; color: #0a0e17;">
+                  Upload CDR PDF
+                  <input type="file" id="cdr-pdf-file" class="file-input" accept=".pdf" />
+                </label>
               </div>
             </div>
             
@@ -497,6 +501,9 @@
 
   <!-- App Mock Datasets -->
   <script src="mock_data.js"></script>
+
+  <!-- PDF.js Standalone for reading PDFs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
 
   <!-- Main Logic Script -->
   <script src="app.js"></script>

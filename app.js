@@ -59,6 +59,7 @@ function initUI() {
   document.getElementById('cdr-file').addEventListener('change', (e) => handleCsvUpload(e, 'cdr'));
   document.getElementById('sdr-file').addEventListener('change', (e) => handleCsvUpload(e, 'sdr'));
   document.getElementById('tdr-file').addEventListener('change', (e) => handleCsvUpload(e, 'tdr'));
+  document.getElementById('cdr-pdf-file').addEventListener('change', handlePdfUpload);
 
   // Trigger file dialogs on zone clicks
   document.querySelectorAll('.upload-zone').forEach(zone => {
@@ -953,4 +954,148 @@ function clearPlayback() {
   }
   state.playbackData = [];
   state.playbackIndex = 0;
+}
+
+/**
+ * Handle PDF File Upload
+ */
+function handlePdfUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  // Set worker path
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    const buffer = e.target.result;
+    try {
+      document.getElementById('cdr-file-status').innerHTML = `⏳ Initializing PDF reader...`;
+      const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise;
+      let fullText = '';
+      
+      document.getElementById('cdr-file-status').innerHTML = `⏳ Reading pages (0/${pdf.numPages})...`;
+      
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        
+        // Map text items to strings and join
+        const pageText = textContent.items.map(item => item.str).join(' ');
+        fullText += pageText + '\n';
+        
+        document.getElementById('cdr-file-status').innerHTML = `⏳ Reading pages (${i}/${pdf.numPages})...`;
+      }
+      
+      // Parse CDR records from extracted text
+      const parsedRecords = parseCdrFromText(fullText);
+      
+      if (parsedRecords.length === 0) {
+        alert("Heuristic scanner was unable to parse CDR entries from this PDF. Please verify it contains text call logs.");
+        document.getElementById('cdr-file-status').innerHTML = `<span style="color:var(--accent-red)">✗ Failed to parse PDF</span>`;
+        return;
+      }
+      
+      state.cdrRecords = parsedRecords;
+      document.getElementById('cdr-file-status').innerHTML = `✓ parsed PDF: loaded <strong>${parsedRecords.length}</strong> calls`;
+      processCdrData();
+      updateDashboardStats();
+      
+      // Re-render visualizers
+      renderNetworkGraph();
+      loadTowerMarkersOnMap();
+    } catch (err) {
+      console.error("PDF Parsing error: ", err);
+      alert("Failed to parse PDF document: " + err.message);
+      document.getElementById('cdr-file-status').innerHTML = `<span style="color:var(--accent-red)">✗ Error reading PDF</span>`;
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+/**
+ * Heuristic CDR Regex Parser
+ */
+function parseCdrFromText(text) {
+  const lines = text.split('\n');
+  const records = [];
+  
+  // Date time matching: YYYY-MM-DD HH:MM:SS or DD-MM-YYYY HH:MM:SS (supporting space separation)
+  const dateRegex = /\b\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\s+\d{2}:\d{2}:\d{2}\b/;
+  
+  // Phone numbers matching (at least 7 to 15 digits, optional + prefix, allowing hyphens/spaces)
+  const phoneRegex = /\+?\b\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b|\+?\b\d{10,13}\b/g;
+
+  lines.forEach(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    
+    // Look for Date/Time stamp
+    const dateMatch = trimmed.match(dateRegex);
+    if (!dateMatch) return;
+    
+    const timestamp = dateMatch[0];
+    
+    // Find all phone numbers in the line
+    const phones = trimmed.match(phoneRegex) || [];
+    if (phones.length === 0) return;
+    
+    const caller = phones[0];
+    const recipient = phones.length > 1 ? phones[1] : 'Unknown';
+    
+    // Scan for call duration
+    let durationSec = 45; // default fallback
+    const durationWordMatch = trimmed.match(/\b(\d+)\s*(?:s|sec|seconds)\b/i);
+    
+    if (durationWordMatch) {
+      durationSec = parseInt(durationWordMatch[1]);
+    } else {
+      // Find any small number on the line that isn't part of the date or phone
+      const possibleNums = trimmed.match(/\b\d{1,4}\b/g) || [];
+      for (let num of possibleNums) {
+        const parsedNum = parseInt(num);
+        if (parsedNum > 0 && parsedNum < 7200 && !timestamp.includes(num)) {
+          durationSec = parsedNum;
+          break;
+        }
+      }
+    }
+    
+    // Call Type (SMS vs Voice)
+    let type = 'Voice';
+    if (trimmed.match(/\b(SMS|TEXT|MESSAGE|MSG)\b/i)) {
+      type = 'SMS';
+    }
+    
+    // Cell Tower ID
+    let towerId = 'TWR-Unknown';
+    const towerMatch = trimmed.match(/\b(TWR-[\w-]+|Cell-[\w-]+)\b/i);
+    if (towerMatch) {
+      towerId = towerMatch[0];
+    } else {
+      // Search for any known tower names if present
+      if (typeof MOCK_DATA !== 'undefined') {
+        const tKeys = Object.keys(MOCK_DATA.towerRegistry);
+        for (let key of tKeys) {
+          if (trimmed.includes(key)) {
+            towerId = key;
+            break;
+          }
+        }
+      }
+    }
+    
+    records.push({
+      Timestamp: timestamp,
+      Caller: caller,
+      Recipient: recipient,
+      Duration_Sec: durationSec.toString(),
+      Type: type,
+      Cell_Tower_ID: towerId,
+      IMEI: 'N/A',
+      IMSI: 'N/A'
+    });
+  });
+  
+  return records;
 }
