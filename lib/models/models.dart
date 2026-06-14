@@ -165,19 +165,43 @@ class SdrProfile {
   });
 
   factory SdrProfile.fromMap(Map<String, dynamic> map) {
+    // Synonym-based lookup so any real CSV column naming works
+    String findVal(List<String> synonyms, {String fallback = ''}) {
+      for (var key in map.keys) {
+        final cleanK = key.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+        for (var syn in synonyms) {
+          if (cleanK == syn.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '')) {
+            final val = map[key]?.toString() ?? '';
+            if (val.isNotEmpty) return val;
+          }
+        }
+      }
+      // Partial match fallback
+      for (var key in map.keys) {
+        final kl = key.toLowerCase();
+        for (var syn in synonyms) {
+          if (kl.contains(syn.toLowerCase())) {
+            final val = map[key]?.toString() ?? '';
+            if (val.isNotEmpty) return val;
+          }
+        }
+      }
+      return fallback;
+    }
+
     return SdrProfile(
-      phone: map['phone']?.toString() ?? '',
-      name: map['name']?.toString() ?? 'Unknown',
-      age: map['age']?.toString() ?? 'N/A',
-      gender: map['gender']?.toString() ?? 'N/A',
-      address: map['address']?.toString() ?? 'Unknown',
-      idType: map['idType']?.toString() ?? 'ID Proof',
-      idNumber: map['idNumber']?.toString() ?? 'N/A',
-      activationDate: map['activationDate']?.toString() ?? 'N/A',
-      alternatePhone: map['alternatePhone']?.toString() ?? 'None',
-      avatarSeed: map['avatarSeed']?.toString() ?? '',
-      role: map['role']?.toString() ?? 'Subject',
-      notes: map['notes']?.toString() ?? '',
+      phone: findVal(['phone', 'mobile', 'msisdn', 'phone_number', 'contact', 'number', 'phonenumber'], fallback: ''),
+      name: findVal(['name', 'subscriber_name', 'full_name', 'fullname', 'subscriber', 'customer_name', 'customername'], fallback: 'Unknown'),
+      age: findVal(['age', 'dob', 'date_of_birth', 'dateofbirth', 'birth'], fallback: 'N/A'),
+      gender: findVal(['gender', 'sex', 'g'], fallback: 'N/A'),
+      address: findVal(['address', 'addr', 'location', 'residence', 'home_address', 'homeaddress'], fallback: 'Unknown'),
+      idType: findVal(['idtype', 'id_type', 'identity_type', 'doc_type', 'document_type', 'id_proof'], fallback: 'ID Proof'),
+      idNumber: findVal(['idnumber', 'id_number', 'identity_number', 'doc_number', 'document_number', 'id_no'], fallback: 'N/A'),
+      activationDate: findVal(['activationdate', 'activation_date', 'sim_activation', 'reg_date', 'registered_date'], fallback: 'N/A'),
+      alternatePhone: findVal(['alternatephone', 'alternate_phone', 'alt_phone', 'alt_number', 'secondary_phone'], fallback: 'None'),
+      avatarSeed: findVal(['avatarseed', 'avatar_seed', 'avatar', 'photo'], fallback: ''),
+      role: findVal(['role', 'type', 'category', 'subject_type', 'relation'], fallback: 'Subject'),
+      notes: findVal(['notes', 'remarks', 'comment', 'comments', 'note', 'description', 'details'], fallback: ''),
     );
   }
 }

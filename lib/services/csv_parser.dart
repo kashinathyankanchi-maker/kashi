@@ -4,8 +4,11 @@ class CsvParserService {
   static List<Map<String, String>> parseCsv(String csvText) {
     if (csvText.trim().isEmpty) return [];
 
-    // Delimiter autodetection
-    final firstLine = csvText.split('\n').first;
+    // Strip BOM (byte-order mark) present in many Excel-saved CSV files
+    final cleaned = csvText.replaceFirst('\uFEFF', '');
+
+    // Delimiter autodetection on first line
+    final firstLine = cleaned.split(RegExp(r'\r\n|\r|\n')).first;
     String fieldDelimiter = ',';
     int maxCount = -1;
     for (var d in [',', ';', '\t', '|']) {
@@ -18,7 +21,9 @@ class CsvParserService {
 
     final List<List<dynamic>> rows = CsvToListConverter(
       fieldDelimiter: fieldDelimiter,
-    ).convert(csvText);
+      eol: '\n',
+    ).convert(cleaned.replaceAll('\r\n', '\n').replaceAll('\r', '\n'));
+
     
     if (rows.isEmpty) return [];
 
