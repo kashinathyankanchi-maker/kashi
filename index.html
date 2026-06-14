@@ -7,7 +7,8 @@
   
   <!-- Leaflet CSS for Mapping -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
-  
+  <!-- SheetJS for Excel (.xlsx/.xls) parsing -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.mini.min.js"></script>
   <!-- Custom Styles -->
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -139,7 +140,7 @@
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
                 Call Detail Records (CDR) Logs
               </h3>
-              <div style="display: flex; gap: 8px;">
+              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                 <label class="btn" style="font-size: 0.75rem; cursor: pointer;">
                   Upload CDR CSV
                   <input type="file" id="cdr-file" class="file-input" accept=".csv" />
@@ -147,6 +148,10 @@
                 <label class="btn btn-primary" style="font-size: 0.75rem; cursor: pointer; color: #0a0e17;">
                   Upload CDR PDF
                   <input type="file" id="cdr-pdf-file" class="file-input" accept=".pdf" />
+                </label>
+                <label class="btn" style="font-size: 0.75rem; cursor: pointer; background: rgba(0,230,118,0.15); color: #00e676; border-color: #00e676;">
+                  📊 Upload CDR Excel
+                  <input type="file" id="cdr-excel-file" class="file-input" accept=".xlsx,.xls" />
                 </label>
               </div>
             </div>
@@ -216,6 +221,10 @@
                 <div class="upload-hint">Upload subscriber indices</div>
                 <input type="file" id="sdr-file" class="file-input" accept=".csv" />
               </div>
+              <label style="display: block; margin-top: 8px; cursor: pointer;">
+                <div class="btn" style="width: 100%; text-align: center; font-size: 0.75rem; background: rgba(0,230,118,0.12); color: #00e676; border: 1px solid #00e676; box-sizing: border-box;">📊 Upload SDR Excel (.xlsx)</div>
+                <input type="file" id="sdr-excel-file" class="file-input" accept=".xlsx,.xls" />
+              </label>
               <div id="sdr-file-status" style="font-size: 0.75rem; color: var(--text-dim); text-align: center;">No SDR directory loaded</div>
             </div>
 

@@ -62,6 +62,10 @@ function initUI() {
   document.getElementById('tower-file').addEventListener('change', (e) => handleCsvUpload(e, 'tower-registry'));
   document.getElementById('cdr-pdf-file').addEventListener('change', handlePdfUpload);
 
+  // Excel upload listeners
+  document.getElementById('cdr-excel-file').addEventListener('change', (e) => handleExcelUpload(e, 'cdr'));
+  document.getElementById('sdr-excel-file').addEventListener('change', (e) => handleExcelUpload(e, 'sdr'));
+
   // Map style dropdown listener
   const styleSelect = document.getElementById('map-style-select');
   if (styleSelect) {
@@ -459,6 +463,67 @@ function handleCsvUpload(event, type) {
     updateDashboardStats();
   };
   reader.readAsText(file);
+}
+
+/**
+ * Handle Excel (.xlsx / .xls) file uploads using SheetJS
+ * @param {Event} event - File input change event
+ * @param {string} type  - 'cdr' | 'sdr'
+ */
+function handleExcelUpload(event, type) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  if (typeof XLSX === 'undefined') {
+    alert('SheetJS library is not loaded. Please check your internet connection and refresh.');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+
+      // Use first sheet
+      const sheetName = workbook.SheetNames[0];
+      if (!sheetName) { alert('No sheets found in Excel file.'); return; }
+
+      const sheet = workbook.Sheets[sheetName];
+      // Convert to array of objects (first row = headers)
+      const parsed = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+      if (!parsed || parsed.length === 0) {
+        alert('No data rows found in the Excel file. Check that the first row contains column headers.');
+        return;
+      }
+
+      // Convert all values to strings for compatibility with normalizers
+      const stringified = parsed.map(row => {
+        const out = {};
+        for (const [k, v] of Object.entries(row)) {
+          out[String(k).trim()] = String(v ?? '').trim();
+        }
+        return out;
+      });
+
+      if (type === 'cdr') {
+        state.cdrRecords = stringified.map(normalizeCdrRow);
+        document.getElementById('cdr-file-status').innerHTML =
+          `✓ Excel loaded <strong>${state.cdrRecords.length}</strong> calls from <em>${file.name}</em>`;
+        processCdrData();
+      } else if (type === 'sdr') {
+        state.sdrDatabase = stringified;
+        document.getElementById('sdr-file-status').innerHTML =
+          `✓ Excel loaded <strong>${stringified.length}</strong> subscribers from <em>${file.name}</em>`;
+      }
+
+      updateDashboardStats();
+    } catch (err) {
+      alert('Failed to parse Excel file: ' + err.message);
+    }
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 /**
