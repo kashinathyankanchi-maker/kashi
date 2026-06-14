@@ -74,60 +74,93 @@ class CdrRecord {
   });
 
   factory CdrRecord.fromMap(Map<String, String> map) {
+    // Synonym lookup — exact match first, then partial match
     String findVal(List<String> synonyms) {
+      final cleanSyns = synonyms.map((s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '')).toList();
+      // 1. Exact clean match
       for (var key in map.keys) {
         final cleanK = key.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+        if (cleanSyns.contains(cleanK)) return map[key] ?? '';
+      }
+      // 2. Partial match
+      for (var key in map.keys) {
+        final kl = key.toLowerCase();
         for (var syn in synonyms) {
-          if (cleanK == syn.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '')) {
-            return map[key] ?? '';
+          if (kl.contains(syn.toLowerCase().replaceAll(RegExp(r'[^a-z]'), ''))) {
+            final v = map[key] ?? '';
+            if (v.isNotEmpty) return v;
           }
         }
       }
       return '';
     }
 
-    var timestampStr = findVal(['timestamp', 'datetime', 'date_time', 'date time', 'date', 'time', 'call_time', 'call date', 'calldate', 'setup_time', 'start_time', 'start time']);
-    if (timestampStr.isEmpty) {
-      for (var key in map.keys) {
-        if (key.toLowerCase().contains('date') || key.toLowerCase().contains('time')) {
-          timestampStr = map[key] ?? '';
-          break;
-        }
-      }
+    // ── TIMESTAMP ──────────────────────────────────────────────────────────
+    // Handle split date + time columns (common in Indian telecom CDRs)
+    final dateStr = findVal(['call_date','calldate','date','call date','start_date','startdate']);
+    final timeStr = findVal(['call_initiation_time','call_initia','callinitia','initiation_time','call_time','calltime','time','start_time','starttime']);
+    String timestampStr;
+    if (dateStr.isNotEmpty && timeStr.isNotEmpty) {
+      timestampStr = '$dateStr $timeStr';
+    } else {
+      timestampStr = findVal(['timestamp','datetime','date_time','date time','call_datetime']);
+      if (timestampStr.isEmpty) timestampStr = dateStr.isNotEmpty ? dateStr : timeStr;
     }
 
-    var callerStr = findVal(['caller', 'calling_number', 'calling number', 'calling', 'caller_num', 'src', 'source', 'source_number', 'from', 'a_number', 'msisdn_a', 'msisdn']);
-    if (callerStr.isEmpty) {
-      for (var key in map.keys) {
-        if (key.toLowerCase().contains('call') || key.toLowerCase().contains('from') || key.toLowerCase().contains('src')) {
-          callerStr = map[key] ?? '';
-          break;
-        }
-      }
+    // ── CALLER / RECIPIENT ─────────────────────────────────────────────────
+    // Indian CDR: Mobile_No = subscriber, Other_Par = other party
+    final mobileNo  = findVal(['mobile_no','mobileno','mobile no','msisdn','cli','a_party','aparty','a_number','anumber','calling_number','calling','caller','caller_num','src','source','from']);
+    final otherPar  = findVal(['other_par','otherpar','other_party','otherparty','b_party','bparty','b_number','bnumber','called_number','called','dialed_number','dialled_number','recipient','destination','dest','dst','to']);
+    final direction = findVal(['call_type','calltype','call type','direction','type_of_call','typeofcall']);
+
+    final String callerStr;
+    final String recipientStr;
+    final dirUp = direction.toUpperCase().trim();
+    if (dirUp == 'IN' || dirUp == 'INCOMING') {
+      callerStr    = otherPar.isNotEmpty ? otherPar : mobileNo;
+      recipientStr = mobileNo;
+    } else {
+      callerStr    = mobileNo;
+      recipientStr = otherPar;
     }
 
-    var recipientStr = findVal(['recipient', 'recipient_number', 'recipient number', 'dialed_number', 'dialed number', 'dialled_number', 'dialled number', 'dst', 'destination', 'dest', 'to', 'b_number', 'msisdn_b']);
-    if (recipientStr.isEmpty) {
-      for (var key in map.keys) {
-        if (key.toLowerCase().contains('recip') || key.toLowerCase().contains('to') || key.toLowerCase().contains('dest') || key.toLowerCase().contains('dst')) {
-          recipientStr = map[key] ?? '';
-          break;
-        }
-      }
+    // ── DURATION ───────────────────────────────────────────────────────────
+    final durationStr = findVal(['call_duration','callduration','call_durat','calldurat','duration_sec','durationsec','duration_seconds','duration','durat']);
+
+    // ── SERVICE TYPE ───────────────────────────────────────────────────────
+    final svcRaw = findVal(['service_type','servicetype','service_ty','servicety','sms_voice']);
+    String typeStr;
+    if (RegExp(r'sms', caseSensitive: false).hasMatch(svcRaw)) {
+      typeStr = 'SMS';
+    } else if (RegExp(r'voice|call', caseSensitive: false).hasMatch(svcRaw)) {
+      typeStr = 'Voice';
+    } else if (RegExp(r'data', caseSensitive: false).hasMatch(svcRaw)) {
+      typeStr = 'Data';
+    } else if (svcRaw.isNotEmpty) {
+      typeStr = svcRaw;
+    } else {
+      typeStr = 'Voice';
     }
 
-    final durationSecStr = findVal(['duration_sec', 'duration sec', 'duration', 'duration_seconds', 'duration seconds', 'duration_min', 'duration(sec)', 'call_duration', 'call duration']);
-    final typeStr = findVal(['type', 'call_type', 'call type', 'event_type', 'event type', 'sms/call', 'direction']);
-    final towerIdStr = findVal(['cell_tower_id', 'cell tower id', 'tower_id', 'tower id', 'cell_id', 'cell id', 'cgi', 'lac', 'location', 'site_id', 'site id', 'tower', 'cell']);
-    final imeiStr = findVal(['imei', 'imei_number', 'device_imei']);
-    final imsiStr = findVal(['imsi', 'imsi_number', 'sim_imsi']);
+    // ── CELL TOWER ─────────────────────────────────────────────────────────
+    final towerIdStr = findVal([
+      'first_cell_id','firstcellid','first_cell','firstcell',
+      'last_cell_id','lastcellid','last_cell','lastcell',
+      'cell_tower_id','celltowerid','tower_id','towerid',
+      'cell_id','cellid','cgi','lac','site_id','siteid',
+      'location_area','locationarea','bts_id','btsid',
+    ]);
+
+    // ── IMEI / IMSI ────────────────────────────────────────────────────────
+    final imeiStr = findVal(['imei','imei_number','imeinumber','device_imei','deviceimei','handset_imei']);
+    final imsiStr = findVal(['imsi','imsi_number','imsinumber','sim_imsi','simimsi']);
 
     return CdrRecord(
       timestamp: _parseFlexibleDateTime(timestampStr),
       caller: callerStr,
       recipient: recipientStr,
-      durationSec: int.tryParse(durationSecStr) ?? 0,
-      type: typeStr.isEmpty ? 'Voice' : typeStr,
+      durationSec: int.tryParse(durationStr) ?? 0,
+      type: typeStr,
       towerId: towerIdStr.isEmpty ? 'TWR-Unknown' : towerIdStr,
       imei: imeiStr.isEmpty ? 'N/A' : imeiStr,
       imsi: imsiStr.isEmpty ? 'N/A' : imsiStr,
