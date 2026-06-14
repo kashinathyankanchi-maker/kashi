@@ -1,5 +1,57 @@
 // Dart Models for Forensic Analyzer
 
+DateTime _parseFlexibleDateTime(String input) {
+  final clean = input.trim();
+  if (clean.isEmpty) return DateTime.now();
+
+  final parsed = DateTime.tryParse(clean);
+  if (parsed != null) return parsed;
+
+  try {
+    final parts = clean.split(RegExp(r'\s+'));
+    if (parts.isNotEmpty) {
+      final datePart = parts[0];
+      final timePart = parts.length > 1 ? parts[1] : '00:00:00';
+      
+      final datePieces = datePart.split(RegExp(r'[-/.]'));
+      if (datePieces.length == 3) {
+        String year, month, day;
+        if (datePieces[0].length == 4) {
+          year = datePieces[0];
+          month = datePieces[1];
+          day = datePieces[2];
+        } else {
+          day = datePieces[0].padLeft(2, '0');
+          month = datePieces[1];
+          year = datePieces[2];
+          if (year.length == 2) {
+            year = "20$year";
+          }
+        }
+        
+        final monthsMap = {
+          'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04', 'may': '05', 'jun': '06',
+          'jul': '07', 'aug': '08', 'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
+        };
+        final mLower = month.toLowerCase();
+        for (var entry in monthsMap.entries) {
+          if (mLower.startsWith(entry.key)) {
+            month = entry.value;
+            break;
+          }
+        }
+        month = month.padLeft(2, '0');
+        
+        final normalizedIso = "$year-$month-$day $timePart";
+        final finalParsed = DateTime.tryParse(normalizedIso);
+        if (finalParsed != null) return finalParsed;
+      }
+    }
+  } catch (_) {}
+
+  return DateTime.now();
+}
+
 class CdrRecord {
   final DateTime timestamp;
   final String caller;
@@ -71,7 +123,7 @@ class CdrRecord {
     final imsiStr = findVal(['imsi', 'imsi_number', 'sim_imsi']);
 
     return CdrRecord(
-      timestamp: DateTime.tryParse(timestampStr) ?? DateTime.now(),
+      timestamp: _parseFlexibleDateTime(timestampStr),
       caller: callerStr,
       recipient: recipientStr,
       durationSec: int.tryParse(durationSecStr) ?? 0,
@@ -162,7 +214,7 @@ class TowerDumpRecord {
     final signalStr = findVal(['signal_dbm', 'signal dbm', 'signal', 'power', 'dbm']);
 
     return TowerDumpRecord(
-      timestamp: DateTime.tryParse(timestampStr) ?? DateTime.now(),
+      timestamp: _parseFlexibleDateTime(timestampStr),
       phoneNumber: phoneStr,
       imsi: imsiStr.isEmpty ? 'N/A' : imsiStr,
       signalDbm: int.tryParse(signalStr) ?? -70,
