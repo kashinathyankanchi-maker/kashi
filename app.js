@@ -513,13 +513,25 @@ function handleCsvUpload(event, type) {
   const file = event.target.files[0];
   if (!file) return;
 
+  // Show loading state immediately
+  const statusId = type === 'cdr' ? 'cdr-file-status'
+                 : type === 'sdr' ? 'sdr-file-status'
+                 : type === 'tdr' ? 'tdr-file-status'
+                 : 'tower-file-status';
+  const statusEl = document.getElementById(statusId);
+  if (statusEl) statusEl.innerHTML = `⏳ Reading <em>${file.name}</em>...`;
+
   const reader = new FileReader();
   reader.onload = function(e) {
     const text = e.target.result;
+    console.log(`[CSV] File: ${file.name} | Size: ${text.length} bytes`);
+
     const parsed = parseCSV(text);
-    
+    console.log(`[CSV] Parsed ${parsed.length} rows. Sample keys:`, parsed[0] ? Object.keys(parsed[0]) : 'none');
+
     if (parsed.length === 0) {
-      alert("Failed to parse file. Please ensure it is a valid CSV.");
+      if (statusEl) statusEl.innerHTML = `❌ Could not read data from <em>${file.name}</em>. Open browser Console (F12) for details.`;
+      console.error('[CSV] Parse returned 0 rows. First 3 raw lines:', text.split(/\r?\n/).slice(0, 3));
       return;
     }
 
