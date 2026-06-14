@@ -271,11 +271,17 @@ function setMapStyle(style) {
  * Helper: Parse CSV String
  */
 function detectDelimiter(firstLine) {
-  const delimiters = [',', ';', '\t', '|'];
+  // Count unquoted occurrences of each delimiter candidate
+  const candidates = [
+    { d: ',', re: /,/g },
+    { d: ';', re: /;/g },
+    { d: '\t', re: /\t/g },
+    { d: '|', re: /\|/g }
+  ];
   let bestDelimiter = ',';
   let maxCount = -1;
-  delimiters.forEach(d => {
-    const count = (firstLine.match(new RegExp('\\' + d, 'g')) || []).length;
+  candidates.forEach(({ d, re }) => {
+    const count = (firstLine.match(re) || []).length;
     if (count > maxCount) {
       maxCount = count;
       bestDelimiter = d;
@@ -356,44 +362,61 @@ function normalizeTdrRow(row) {
 }
 
 function parseCSV(text) {
-  const lines = text.split(/\r\n|\n/);
-  if (lines.length === 0 || lines[0].trim() === '') return [];
-  
-  const delimiter = detectDelimiter(lines[0]);
-  const headers = lines[0].split(delimiter).map(h => h.trim().replace(/^["']|["']$/g, ''));
-  const results = [];
-  
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    
-    let insideQuote = false;
-    let entries = [];
-    let currentEntry = '';
-    
-    for (let char of line) {
-      if (char === '"' || char === "'") {
-        insideQuote = !insideQuote;
-      } else if (char === delimiter && !insideQuote) {
-        entries.push(currentEntry.trim());
-        currentEntry = '';
+  // Strip BOM if present (common in Excel-saved CSVs)
+  text = text.replace(/^\uFEFF/, '');
+
+  const lines = text.split(/\r\n|\r|\n/);
+  // Filter completely blank lines
+  const nonEmpty = lines.filter(l => l.trim() !== '');
+  if (nonEmpty.length === 0) return [];
+
+  const delimiter = detectDelimiter(nonEmpty[0]);
+
+  // Parse a single CSV line respecting quoted fields
+  function parseLine(line) {
+    const entries = [];
+    let current = '';
+    let inQuote = false;
+    let quoteChar = '';
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuote) {
+        if (ch === quoteChar) {
+          // Check for escaped quote (double-quote)
+          if (line[i + 1] === quoteChar) { current += ch; i++; }
+          else { inQuote = false; }
+        } else {
+          current += ch;
+        }
       } else {
-        currentEntry += char;
+        if (ch === '"' || ch === "'") { inQuote = true; quoteChar = ch; }
+        else if (ch === delimiter) { entries.push(current.trim()); current = ''; }
+        else { current += ch; }
       }
     }
-    entries.push(currentEntry.trim());
+    entries.push(current.trim());
+    return entries;
+  }
 
-    if (entries.length === 0 || (entries.length === 1 && entries[0] === '')) continue;
-    
+  const headers = parseLine(nonEmpty[0]).map(h => h.replace(/^["']|["']$/g, '').trim());
+  const results = [];
+
+  for (let i = 1; i < nonEmpty.length; i++) {
+    const entries = parseLine(nonEmpty[i]);
+    // Skip rows that are entirely empty
+    if (entries.every(e => e === '')) continue;
+
     const obj = {};
     headers.forEach((header, index) => {
-      let val = entries[index] || '';
-      val = val.replace(/^["']|["']$/g, '');
-      obj[header] = val;
+      if (header) {
+        let val = entries[index] !== undefined ? entries[index] : '';
+        val = val.replace(/^["']|["']$/g, '');
+        obj[header] = val;
+      }
     });
     results.push(obj);
   }
-  
+
   return results;
 }
 
