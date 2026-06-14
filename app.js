@@ -303,35 +303,74 @@ function normalizeCdrRow(row) {
   };
 
   const keys = Object.keys(row);
+
+  // Exact-match first, then partial-match fallback
   const findVal = (synonyms) => {
-    const matchingKey = keys.find(k => {
-      const cleanK = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-      return synonyms.some(syn => cleanK === syn.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    const cleanSyns = synonyms.map(s => s.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    // 1. Exact clean match
+    let matchKey = keys.find(k => cleanSyns.includes(k.toLowerCase().replace(/[^a-z0-9]/g, '')));
+    if (matchKey) return row[matchKey] || null;
+    // 2. Partial match (key contains any synonym word)
+    matchKey = keys.find(k => {
+      const kl = k.toLowerCase();
+      return synonyms.some(s => kl.includes(s.toLowerCase().replace(/[^a-z]/g, '')));
     });
-    return matchingKey ? row[matchingKey] : null;
+    return matchKey ? (row[matchKey] || null) : null;
   };
 
-  normalized.Timestamp = findVal(['timestamp', 'datetime', 'date_time', 'date time', 'date', 'time', 'call_time', 'call date', 'calldate', 'setup_time', 'start_time', 'start time']) || '';
-  normalized.Caller = findVal(['caller', 'calling_number', 'calling number', 'calling', 'caller_num', 'src', 'source', 'source_number', 'from', 'a_number', 'msisdn_a', 'msisdn']) || '';
-  normalized.Recipient = findVal(['recipient', 'recipient_number', 'recipient number', 'dialed_number', 'dialed number', 'dialled_number', 'dialled number', 'dst', 'destination', 'dest', 'to', 'b_number', 'msisdn_b']) || '';
-  normalized.Duration_Sec = findVal(['duration_sec', 'duration sec', 'duration', 'duration_seconds', 'duration seconds', 'duration_min', 'duration(sec)', 'call_duration', 'call duration']) || '0';
-  normalized.Type = findVal(['type', 'call_type', 'call type', 'event_type', 'event type', 'sms/call', 'direction']) || 'Voice';
-  normalized.Cell_Tower_ID = findVal(['cell_tower_id', 'cell tower id', 'tower_id', 'tower id', 'cell_id', 'cell id', 'cgi', 'lac', 'location', 'site_id', 'site id', 'tower', 'cell']) || 'TWR-Unknown';
-  normalized.IMEI = findVal(['imei', 'imei_number', 'device_imei']) || 'N/A';
-  normalized.IMSI = findVal(['imsi', 'imsi_number', 'sim_imsi']) || 'N/A';
+  // ── TIMESTAMP ──────────────────────────────────────────────────────────────
+  // Handle split date+time columns common in Indian telecom CDRs
+  const dateVal = findVal(['call_date','calldate','date','call date','start_date','startdate']);
+  const timeVal = findVal(['call_initiation_time','call_initia','callinitia','initiation_time','call_time','calltime','time','start_time','starttime']);
+  if (dateVal && timeVal) {
+    normalized.Timestamp = `${dateVal} ${timeVal}`;
+  } else {
+    normalized.Timestamp = findVal(['timestamp','datetime','date_time','date time','call_datetime']) ||
+                           dateVal || timeVal || '';
+  }
 
-  if (!normalized.Timestamp) {
-    const fallbackKey = keys.find(k => k.toLowerCase().includes('date') || k.toLowerCase().includes('time'));
-    if (fallbackKey) normalized.Timestamp = row[fallbackKey];
+  // ── CALLER / RECIPIENT ─────────────────────────────────────────────────────
+  // Indian CDR: Mobile_No = subscriber, Other_Par = other party, Call_Type = IN/OUT
+  const mobileno  = findVal(['mobile_no','mobileno','mobile no','msisdn','cli','a_party','aparty','a_number','anumber','calling_number','calling','caller','caller_num','src','source','from']);
+  const otherPart = findVal(['other_par','otherpar','other_party','otherparty','b_party','bparty','b_number','bnumber','called_number','called','dialed_number','dialled_number','recipient','destination','dest','dst','to']);
+  const direction = findVal(['call_type','calltype','call type','direction','type_of_call','typeofcall']);
+
+  const dirUp = (direction || '').toString().toUpperCase().trim();
+  if (dirUp === 'IN' || dirUp === 'INCOMING') {
+    normalized.Caller    = otherPart || mobileno || '';
+    normalized.Recipient = mobileno  || '';
+  } else {
+    normalized.Caller    = mobileno  || '';
+    normalized.Recipient = otherPart || '';
   }
-  if (!normalized.Caller) {
-    const fallbackKey = keys.find(k => k.toLowerCase().includes('call') || k.toLowerCase().includes('from') || k.toLowerCase().includes('src'));
-    if (fallbackKey) normalized.Caller = row[fallbackKey];
+
+  // ── DURATION ───────────────────────────────────────────────────────────────
+  normalized.Duration_Sec = findVal(['call_duration','callduration','call_durat','calldurat','duration_sec','durationsec','duration_seconds','duration','durat']) || '0';
+
+  // ── SERVICE TYPE ───────────────────────────────────────────────────────────
+  const svcType = findVal(['service_type','servicetype','service_ty','servicety','type','call_type','calltype','sms_voice']) || '';
+  if (/sms/i.test(svcType)) {
+    normalized.Type = 'SMS';
+  } else if (/voice|call/i.test(svcType)) {
+    normalized.Type = 'Voice';
+  } else if (/data/i.test(svcType)) {
+    normalized.Type = 'Data';
+  } else {
+    normalized.Type = svcType || 'Voice';
   }
-  if (!normalized.Recipient) {
-    const fallbackKey = keys.find(k => k.toLowerCase().includes('recip') || k.toLowerCase().includes('to') || k.toLowerCase().includes('dest') || k.toLowerCase().includes('dst'));
-    if (fallbackKey) normalized.Recipient = row[fallbackKey];
-  }
+
+  // ── CELL TOWER ─────────────────────────────────────────────────────────────
+  normalized.Cell_Tower_ID = findVal([
+    'first_cell_id','firstcellid','first_cell','firstcell',
+    'last_cell_id','lastcellid','last_cell','lastcell',
+    'cell_tower_id','celltowerid','tower_id','towerid',
+    'cell_id','cellid','cgi','lac','site_id','siteid',
+    'location_area','locationarea','bts_id','btsid'
+  ]) || 'TWR-Unknown';
+
+  // ── IMEI / IMSI ────────────────────────────────────────────────────────────
+  normalized.IMEI = findVal(['imei','imei_number','imeinumber','device_imei','deviceimei','handset_imei']) || 'N/A';
+  normalized.IMSI = findVal(['imsi','imsi_number','imsinumber','sim_imsi','simimsi','international_mobile_subscriber']) || 'N/A';
 
   return normalized;
 }
@@ -366,11 +405,65 @@ function parseCSV(text) {
   text = text.replace(/^\uFEFF/, '');
 
   const lines = text.split(/\r\n|\r|\n/);
-  // Filter completely blank lines
   const nonEmpty = lines.filter(l => l.trim() !== '');
   if (nonEmpty.length === 0) return [];
 
-  const delimiter = detectDelimiter(nonEmpty[0]);
+  // ── SKIP METADATA ROWS ──────────────────────────────────────────────────────
+  // Real-world CDR files (Indian telecom, Excel exports) often have
+  // 5-15 lines of metadata before the actual column header row.
+  // We detect the real header by scoring each row on known CDR keywords.
+  const CDR_HEADER_KEYWORDS = [
+    'sl_no','slno','serial','sno',
+    'mobile_no','mobileno','msisdn','cli','calling','caller','a_party','aparty',
+    'other_par','otherpar','b_party','bparty','called','dialed','recipient',
+    'call_type','calltype','call type','direction',
+    'call_date','calldate','date','datetime','timestamp',
+    'call_initia','callinitia','call_time','calltime','time',
+    'call_durat','calldurat','duration',
+    'service_ty','servicety','service_type','servicetype',
+    'first_cell','firstcell','last_cell','lastcell','cell_id','cellid','cgi',
+    'imei','imsi'
+  ];
+
+  function scoreHeaderRow(line, delim) {
+    const cells = line.split(delim).map(c => c.trim().toLowerCase().replace(/[^a-z0-9_]/g, ''));
+    let score = 0;
+    cells.forEach(cell => {
+      if (CDR_HEADER_KEYWORDS.some(kw => cell === kw || cell.startsWith(kw) || kw.startsWith(cell))) score++;
+    });
+    return score;
+  }
+
+  // Detect delimiter using first 20 non-empty lines (pick line with most splits)
+  let delimiter = ',';
+  let bestLineForDelim = nonEmpty.slice(0, Math.min(20, nonEmpty.length))
+    .reduce((best, l) => {
+      const commas = (l.match(/,/g) || []).length;
+      const tabs   = (l.match(/\t/g) || []).length;
+      const semis  = (l.match(/;/g) || []).length;
+      const pipes  = (l.match(/\|/g) || []).length;
+      const max = Math.max(commas, tabs, semis, pipes);
+      return max > best.max ? { line: l, max } : best;
+    }, { line: nonEmpty[0], max: 0 });
+
+  const dl = bestLineForDelim.line;
+  const counts = [
+    { d: ',',  n: (dl.match(/,/g)  || []).length },
+    { d: '\t', n: (dl.match(/\t/g) || []).length },
+    { d: ';',  n: (dl.match(/;/g)  || []).length },
+    { d: '|',  n: (dl.match(/\|/g) || []).length }
+  ];
+  delimiter = counts.reduce((a, b) => b.n > a.n ? b : a).d;
+
+  // Find the actual header row (score each of first 25 rows)
+  let headerIndex = 0;
+  let bestScore   = -1;
+  const scanLimit = Math.min(25, nonEmpty.length);
+  for (let i = 0; i < scanLimit; i++) {
+    const score = scoreHeaderRow(nonEmpty[i], delimiter);
+    if (score > bestScore) { bestScore = score; headerIndex = i; }
+    if (score >= 4) break; // confident enough
+  }
 
   // Parse a single CSV line respecting quoted fields
   function parseLine(line) {
@@ -382,12 +475,9 @@ function parseCSV(text) {
       const ch = line[i];
       if (inQuote) {
         if (ch === quoteChar) {
-          // Check for escaped quote (double-quote)
           if (line[i + 1] === quoteChar) { current += ch; i++; }
           else { inQuote = false; }
-        } else {
-          current += ch;
-        }
+        } else { current += ch; }
       } else {
         if (ch === '"' || ch === "'") { inQuote = true; quoteChar = ch; }
         else if (ch === delimiter) { entries.push(current.trim()); current = ''; }
@@ -398,12 +488,11 @@ function parseCSV(text) {
     return entries;
   }
 
-  const headers = parseLine(nonEmpty[0]).map(h => h.replace(/^["']|["']$/g, '').trim());
+  const headers = parseLine(nonEmpty[headerIndex]).map(h => h.replace(/^["']|["']$/g, '').trim());
   const results = [];
 
-  for (let i = 1; i < nonEmpty.length; i++) {
+  for (let i = headerIndex + 1; i < nonEmpty.length; i++) {
     const entries = parseLine(nonEmpty[i]);
-    // Skip rows that are entirely empty
     if (entries.every(e => e === '')) continue;
 
     const obj = {};
