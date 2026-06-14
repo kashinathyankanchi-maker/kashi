@@ -70,8 +70,9 @@ function initUI() {
     });
   }
 
-  // Trigger file dialogs on zone clicks
+  // Trigger file dialogs and manage drag-and-drop on zone elements
   document.querySelectorAll('.upload-zone').forEach(zone => {
+    // Click to open dialog
     zone.addEventListener('click', (e) => {
       // Don't click file input if click was directly on input (avoids double fire)
       if (e.target.tagName !== 'INPUT') {
@@ -79,6 +80,38 @@ function initUI() {
         if (input) input.click();
       }
     });
+
+    // Drag effects
+    ['dragenter', 'dragover'].forEach(eventName => {
+      zone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        zone.classList.add('highlight');
+      }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      zone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        zone.classList.remove('highlight');
+      }, false);
+    });
+
+    // Drop handler
+    zone.addEventListener('drop', (e) => {
+      const dt = e.dataTransfer;
+      const files = dt.files;
+      if (files && files.length > 0) {
+        const input = zone.querySelector('input[type="file"]');
+        if (input) {
+          input.files = files;
+          // Dispatch change event to trigger the parser handler
+          const event = new Event('change', { bubbles: true });
+          input.dispatchEvent(event);
+        }
+      }
+    }, false);
   });
 
   // SDR search button
@@ -107,6 +140,52 @@ function initUI() {
 
   // Suspect filter clear button
   document.getElementById('clear-suspect-filter-btn').addEventListener('click', clearSuspectFilter);
+
+  // CDR Card Drag and Drop Support
+  const cdrCard = document.getElementById('cdr-card');
+  if (cdrCard) {
+    ['dragenter', 'dragover'].forEach(eventName => {
+      cdrCard.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        cdrCard.classList.add('highlight');
+      }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      cdrCard.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        cdrCard.classList.remove('highlight');
+      }, false);
+    });
+
+    cdrCard.addEventListener('drop', (e) => {
+      const dt = e.dataTransfer;
+      const files = dt.files;
+      if (files && files.length > 0) {
+        const file = files[0];
+        const fileName = file.name.toLowerCase();
+        if (fileName.endsWith('.csv')) {
+          const input = document.getElementById('cdr-file');
+          if (input) {
+            input.files = files;
+            const event = new Event('change', { bubbles: true });
+            input.dispatchEvent(event);
+          }
+        } else if (fileName.endsWith('.pdf')) {
+          const input = document.getElementById('cdr-pdf-file');
+          if (input) {
+            input.files = files;
+            const event = new Event('change', { bubbles: true });
+            input.dispatchEvent(event);
+          }
+        } else {
+          alert("Unsupported file format. Please drop a CDR CSV or PDF file.");
+        }
+      }
+    }, false);
+  }
 }
 
 /**
@@ -300,7 +379,7 @@ function parseCSV(text) {
     }
     entries.push(currentEntry.trim());
 
-    if (entries.length < headers.length) continue;
+    if (entries.length === 0 || (entries.length === 1 && entries[0] === '')) continue;
     
     const obj = {};
     headers.forEach((header, index) => {
@@ -599,7 +678,23 @@ function updateDashboardStats() {
  */
 function renderNetworkGraph() {
   const container = document.getElementById('network-container');
-  if (!container || state.cdrRecords.length === 0) return;
+  if (!container) return;
+
+  if (typeof vis === 'undefined') {
+    console.warn("vis.js is not loaded.");
+    container.innerHTML = `
+      <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 20px; text-align: center; color: var(--text-muted);">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width: 48px; height: 48px; stroke: var(--text-dim); margin-bottom: 12px;">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+        </svg>
+        <span style="font-weight: 600; font-size: 0.95rem; margin-bottom: 4px; color: var(--text-main);">Visualization Offline</span>
+        <span style="font-size: 0.8rem; max-width: 320px; line-height: 1.4;">Network Graph requires an active internet connection to load the Vis-Network library.</span>
+      </div>
+    `;
+    return;
+  }
+
+  if (state.cdrRecords.length === 0) return;
 
   const nodesMap = {};
   const edgesMap = {};
@@ -1147,6 +1242,11 @@ function clearPlayback() {
 function handlePdfUpload(event) {
   const file = event.target.files[0];
   if (!file) return;
+
+  if (typeof pdfjsLib === 'undefined') {
+    alert("PDF library (pdf.js) is not loaded. Please connect to the internet to parse PDF files.");
+    return;
+  }
 
   // Set worker path
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';

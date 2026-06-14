@@ -473,6 +473,18 @@ body {
   background: rgba(6, 182, 212, 0.02);
 }
 
+.upload-zone.highlight {
+  border-color: var(--accent-cyan);
+  background: rgba(6, 182, 212, 0.08);
+  box-shadow: 0 0 20px var(--accent-cyan-glow);
+}
+
+.forensic-card.highlight {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 25px var(--accent-cyan-glow);
+  background: rgba(17, 24, 39, 0.9);
+}
+
 .upload-icon {
   width: 48px;
   height: 48px;
