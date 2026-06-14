@@ -216,27 +216,35 @@ class AppState with ChangeNotifier {
     final lines = text.split('\n');
     final List<Map<String, String>> records = [];
     
-    final dateRegex = RegExp(r'\b\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[APap][Mm])?\b');
-    final phoneRegex = RegExp(r'\+?\b\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b|\+?\b\d{10,15}\b');
-    
+    final dateRegex = RegExp(
+      r'\b\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\b|\b\d{1,2}[-/.\s](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-/.\s]\d{2,4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-/.\s]\d{1,2}[-,/.\s]+\d{2,4}\b',
+      caseSensitive: false,
+    );
+    final timeRegex = RegExp(r'\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*[APap][Mm])?\b');
+    final candidateRegex = RegExp(r'\+?[\d\s-]{7,20}');
+
     for (var line in lines) {
       final trimmed = line.trim();
       if (trimmed.isEmpty) continue;
       
       final dateMatch = dateRegex.firstMatch(trimmed);
-      if (dateMatch == null) continue;
-      final timestamp = dateMatch.group(0) ?? '';
+      final timeMatch = timeRegex.firstMatch(trimmed);
+      if (dateMatch == null || timeMatch == null) continue;
       
-      // Find all phones
-      final Iterable<RegExpMatch> phoneMatches = phoneRegex.allMatches(trimmed);
-      final List<String> phones = phoneMatches.map((m) => m.group(0) ?? '').toList();
+      final timestamp = "${dateMatch.group(0)} ${timeMatch.group(0)}";
       
-      // Filter out IMEI/IMSI signatures (typically 15-16 digits)
+      // Remove date and time to prevent collision
+      var lineForPhones = trimmed
+          .replaceAll(dateMatch.group(0)!, ' ')
+          .replaceAll(timeMatch.group(0)!, ' ');
+      
+      final Iterable<RegExpMatch> phoneMatches = candidateRegex.allMatches(lineForPhones);
       final List<String> cleanPhones = [];
-      for (var p in phones) {
-        final digits = p.replaceAll(RegExp(r'\D'), '');
+      for (var m in phoneMatches) {
+        final val = m.group(0) ?? '';
+        final digits = val.replaceAll(RegExp(r'\D'), '');
         if (digits.length >= 7 && digits.length <= 14) {
-          cleanPhones.add(p.trim());
+          cleanPhones.add(val.trim());
         }
       }
       if (cleanPhones.isEmpty) continue;
@@ -250,10 +258,10 @@ class AppState with ChangeNotifier {
       if (durationWordMatch != null) {
         durationSec = int.tryParse(durationWordMatch.group(1) ?? '45') ?? 45;
       } else {
-        final possibleNums = RegExp(r'\b\d{1,4}\b').allMatches(trimmed).map((m) => m.group(0) ?? '').toList();
+        final possibleNums = RegExp(r'\b\d{1,4}\b').allMatches(lineForPhones).map((m) => m.group(0) ?? '').toList();
         for (var num in possibleNums) {
           final parsedNum = int.tryParse(num) ?? 0;
-          if (parsedNum > 0 && parsedNum < 7200 && !timestamp.contains(num)) {
+          if (parsedNum > 0 && parsedNum < 7200) {
             durationSec = parsedNum;
             break;
           }

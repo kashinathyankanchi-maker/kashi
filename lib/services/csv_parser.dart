@@ -4,7 +4,22 @@ class CsvParserService {
   static List<Map<String, String>> parseCsv(String csvText) {
     if (csvText.trim().isEmpty) return [];
 
-    final List<List<dynamic>> rows = const CsvToListConverter().convert(csvText);
+    // Delimiter autodetection
+    final firstLine = csvText.split('\n').first;
+    String fieldDelimiter = ',';
+    int maxCount = -1;
+    for (var d in [',', ';', '\t', '|']) {
+      final count = d.allMatches(firstLine).length;
+      if (count > maxCount) {
+        maxCount = count;
+        fieldDelimiter = d;
+      }
+    }
+
+    final List<List<dynamic>> rows = CsvToListConverter(
+      fieldDelimiter: fieldDelimiter,
+    ).convert(csvText);
+    
     if (rows.isEmpty) return [];
 
     final headers = rows[0].map((h) => h.toString().trim()).toList();

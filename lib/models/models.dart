@@ -22,15 +22,63 @@ class CdrRecord {
   });
 
   factory CdrRecord.fromMap(Map<String, String> map) {
+    String findVal(List<String> synonyms) {
+      for (var key in map.keys) {
+        final cleanK = key.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+        for (var syn in synonyms) {
+          if (cleanK == syn.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '')) {
+            return map[key] ?? '';
+          }
+        }
+      }
+      return '';
+    }
+
+    var timestampStr = findVal(['timestamp', 'datetime', 'date_time', 'date time', 'date', 'time', 'call_time', 'call date', 'calldate', 'setup_time', 'start_time', 'start time']);
+    if (timestampStr.isEmpty) {
+      for (var key in map.keys) {
+        if (key.toLowerCase().contains('date') || key.toLowerCase().contains('time')) {
+          timestampStr = map[key] ?? '';
+          break;
+        }
+      }
+    }
+
+    var callerStr = findVal(['caller', 'calling_number', 'calling number', 'calling', 'caller_num', 'src', 'source', 'source_number', 'from', 'a_number', 'msisdn_a', 'msisdn']);
+    if (callerStr.isEmpty) {
+      for (var key in map.keys) {
+        if (key.toLowerCase().contains('call') || key.toLowerCase().contains('from') || key.toLowerCase().contains('src')) {
+          callerStr = map[key] ?? '';
+          break;
+        }
+      }
+    }
+
+    var recipientStr = findVal(['recipient', 'recipient_number', 'recipient number', 'dialed_number', 'dialed number', 'dialled_number', 'dialled number', 'dst', 'destination', 'dest', 'to', 'b_number', 'msisdn_b']);
+    if (recipientStr.isEmpty) {
+      for (var key in map.keys) {
+        if (key.toLowerCase().contains('recip') || key.toLowerCase().contains('to') || key.toLowerCase().contains('dest') || key.toLowerCase().contains('dst')) {
+          recipientStr = map[key] ?? '';
+          break;
+        }
+      }
+    }
+
+    final durationSecStr = findVal(['duration_sec', 'duration sec', 'duration', 'duration_seconds', 'duration seconds', 'duration_min', 'duration(sec)', 'call_duration', 'call duration']);
+    final typeStr = findVal(['type', 'call_type', 'call type', 'event_type', 'event type', 'sms/call', 'direction']);
+    final towerIdStr = findVal(['cell_tower_id', 'cell tower id', 'tower_id', 'tower id', 'cell_id', 'cell id', 'cgi', 'lac', 'location', 'site_id', 'site id', 'tower', 'cell']);
+    final imeiStr = findVal(['imei', 'imei_number', 'device_imei']);
+    final imsiStr = findVal(['imsi', 'imsi_number', 'sim_imsi']);
+
     return CdrRecord(
-      timestamp: DateTime.tryParse(map['Timestamp'] ?? '') ?? DateTime.now(),
-      caller: map['Caller'] ?? '',
-      recipient: map['Recipient'] ?? '',
-      durationSec: int.tryParse(map['Duration_Sec'] ?? '0') ?? 0,
-      type: map['Type'] ?? 'Voice',
-      towerId: map['Cell_Tower_ID'] ?? '',
-      imei: map['IMEI'] ?? '',
-      imsi: map['IMSI'] ?? '',
+      timestamp: DateTime.tryParse(timestampStr) ?? DateTime.now(),
+      caller: callerStr,
+      recipient: recipientStr,
+      durationSec: int.tryParse(durationSecStr) ?? 0,
+      type: typeStr.isEmpty ? 'Voice' : typeStr,
+      towerId: towerIdStr.isEmpty ? 'TWR-Unknown' : towerIdStr,
+      imei: imeiStr.isEmpty ? 'N/A' : imeiStr,
+      imsi: imsiStr.isEmpty ? 'N/A' : imsiStr,
     );
   }
 }
@@ -96,11 +144,28 @@ class TowerDumpRecord {
   });
 
   factory TowerDumpRecord.fromMap(Map<String, String> map) {
+    String findVal(List<String> synonyms) {
+      for (var key in map.keys) {
+        final cleanK = key.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+        for (var syn in synonyms) {
+          if (cleanK == syn.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '')) {
+            return map[key] ?? '';
+          }
+        }
+      }
+      return '';
+    }
+
+    final timestampStr = findVal(['timestamp', 'datetime', 'date_time', 'date time', 'date', 'time', 'call_time']);
+    final phoneStr = findVal(['phone_number', 'phone number', 'phone', 'number', 'mobile', 'msisdn']);
+    final imsiStr = findVal(['imsi', 'imsi_number']);
+    final signalStr = findVal(['signal_dbm', 'signal dbm', 'signal', 'power', 'dbm']);
+
     return TowerDumpRecord(
-      timestamp: DateTime.tryParse(map['Timestamp'] ?? '') ?? DateTime.now(),
-      phoneNumber: map['Phone_Number'] ?? '',
-      imsi: map['IMSI'] ?? '',
-      signalDbm: int.tryParse(map['Signal_DBm'] ?? '0') ?? 0,
+      timestamp: DateTime.tryParse(timestampStr) ?? DateTime.now(),
+      phoneNumber: phoneStr,
+      imsi: imsiStr.isEmpty ? 'N/A' : imsiStr,
+      signalDbm: int.tryParse(signalStr) ?? -70,
     );
   }
 }
