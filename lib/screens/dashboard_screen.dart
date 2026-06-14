@@ -8,6 +8,7 @@ import '../models/models.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 
+
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({Key? key}) : super(key: key);
 
@@ -218,6 +219,50 @@ class DashboardScreen extends StatelessWidget {
                                         } else if (file.path != null) {
                                           final csvText = await File(file.path!).readAsString();
                                           state.importTowerRegistry(csvText);
+                                        }
+                                      }
+                                    },
+                                  ),
+                                   const SizedBox(width: 8),
+                                  TextButton.icon(
+                                    icon: const Icon(Icons.table_chart_rounded, size: 16, color: TacticalTheme.accentGreen),
+                                    label: const Text("Upload CDR Excel", style: TextStyle(fontSize: 12, color: Colors.white70)),
+                                    onPressed: () async {
+                                      FilePickerResult? result = await FilePicker.platform.pickFiles(
+                                        type: FileType.custom,
+                                        allowedExtensions: ['xlsx', 'xls'],
+                                        withData: true,
+                                      );
+                                      if (result != null) {
+                                        final file = result.files.single;
+                                        List<int>? bytes = file.bytes;
+                                        if (bytes == null && file.path != null) {
+                                          bytes = await File(file.path!).readAsBytes();
+                                        }
+                                        if (bytes != null) {
+                                          state.importExcel(bytes, 'cdr');
+                                        }
+                                      }
+                                    },
+                                  ),
+                                  const SizedBox(width: 8),
+                                  TextButton.icon(
+                                    icon: const Icon(Icons.table_chart_outlined, size: 16, color: TacticalTheme.accentGreen),
+                                    label: const Text("Upload Towers Excel", style: TextStyle(fontSize: 12, color: Colors.white70)),
+                                    onPressed: () async {
+                                      FilePickerResult? result = await FilePicker.platform.pickFiles(
+                                        type: FileType.custom,
+                                        allowedExtensions: ['xlsx', 'xls'],
+                                        withData: true,
+                                      );
+                                      if (result != null) {
+                                        final file = result.files.single;
+                                        List<int>? bytes = file.bytes;
+                                        if (bytes == null && file.path != null) {
+                                          bytes = await File(file.path!).readAsBytes();
+                                        }
+                                        if (bytes != null) {
+                                          state.importExcel(bytes, 'tower');
                                         }
                                       }
                                     },

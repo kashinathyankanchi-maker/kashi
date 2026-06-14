@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import '../models/models.dart';
 import '../services/csv_parser.dart';
+import '../services/excel_parser.dart';
 import '../services/mock_case.dart';
 
 class AppState with ChangeNotifier {
@@ -187,6 +188,59 @@ class AppState with ChangeNotifier {
             'lat': lat,
             'lng': lng,
           };
+        }
+      }
+    }
+    notifyListeners();
+  }
+
+  // Import uploaded Excel (.xlsx / .xls)
+  // type: 'cdr' | 'sdr' | 'tdr' | 'tower'
+  void importExcel(List<int> bytes, String type, {String? towerId}) {
+    final parsed = ExcelParserService.parseExcel(bytes);
+    if (parsed.isEmpty) return;
+
+    if (type == 'cdr') {
+      _cdrRecords = parsed.map((m) => CdrRecord.fromMap(m)).toList();
+    } else if (type == 'sdr') {
+      _sdrDatabase = parsed.map((m) => SdrProfile.fromMap(m)).toList();
+    } else if (type == 'tdr') {
+      final tId = towerId ?? 'EXCEL-${_tdrData.length + 1}';
+      _tdrData[tId] = parsed.map((m) => TowerDumpRecord.fromMap(m)).toList();
+      _selectedTowers.add(tId);
+    } else if (type == 'tower') {
+      importTowerRegistryRows(parsed);
+      return;
+    }
+    notifyListeners();
+  }
+
+  // Import tower registry from pre-parsed rows
+  void importTowerRegistryRows(List<Map<String, String>> parsed) {
+    for (var row in parsed) {
+      final idKey = row.keys.firstWhere(
+        (k) => k.toLowerCase() == 'cell_tower_id' || k.toLowerCase() == 'tower_id' || k.toLowerCase() == 'id',
+        orElse: () => '',
+      );
+      final nameKey = row.keys.firstWhere(
+        (k) => k.toLowerCase() == 'tower_name' || k.toLowerCase() == 'name',
+        orElse: () => '',
+      );
+      final latKey = row.keys.firstWhere(
+        (k) => k.toLowerCase() == 'latitude' || k.toLowerCase() == 'lat',
+        orElse: () => '',
+      );
+      final lngKey = row.keys.firstWhere(
+        (k) => k.toLowerCase() == 'longitude' || k.toLowerCase() == 'lng' || k.toLowerCase() == 'lon',
+        orElse: () => '',
+      );
+      if (idKey.isNotEmpty && latKey.isNotEmpty && lngKey.isNotEmpty) {
+        final id = row[idKey] ?? '';
+        final name = nameKey.isNotEmpty ? (row[nameKey] ?? '') : 'Tower $id';
+        final lat = double.tryParse(row[latKey] ?? '');
+        final lng = double.tryParse(row[lngKey] ?? '');
+        if (id.isNotEmpty && lat != null && lng != null) {
+          MockCaseData.towerRegistry[id] = {'name': name, 'lat': lat, 'lng': lng};
         }
       }
     }

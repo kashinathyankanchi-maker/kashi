@@ -1,5 +1,8 @@
+import 'dart:io' show File;
+import 'dart:convert' show utf8;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:file_picker/file_picker.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 
@@ -18,7 +21,7 @@ class TdrScreen extends StatelessWidget {
           direction: isDesktop ? Axis.horizontal : Axis.vertical,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Left sidebar: Tower Selectors
+            // Left sidebar: Tower Selectors + Upload
             Expanded(
               flex: isDesktop ? 1 : 0,
               child: Padding(
@@ -40,9 +43,9 @@ class TdrScreen extends StatelessWidget {
                         style: TextStyle(fontSize: 12, color: TacticalTheme.textMuted),
                       ),
                       const SizedBox(height: 18),
-                      
+
                       towerIds.isEmpty
-                          ? const Text("No TDR datasets loaded. Load a case or upload CSV dumps.", style: TextStyle(color: TacticalTheme.textDim))
+                          ? const Text("No TDR datasets loaded. Load a case or upload CSV/Excel dumps.", style: TextStyle(color: TacticalTheme.textDim))
                           : ListView.builder(
                               shrinkWrap: true,
                               physics: const NeverScrollableScrollPhysics(),
@@ -60,11 +63,71 @@ class TdrScreen extends StatelessWidget {
                                 );
                               },
                             ),
-                      const SizedBox(height: 24),
-                      
+                      const SizedBox(height: 20),
+
+                      // Upload TDR CSV
+                      SizedBox(
+                        width: double.infinity,
+                        child: TextButton.icon(
+                          icon: const Icon(Icons.upload_file_rounded, size: 16, color: TacticalTheme.accentCyan),
+                          label: const Text("Upload TDR CSV", style: TextStyle(fontSize: 12, color: Colors.white70)),
+                          onPressed: () async {
+                            FilePickerResult? result = await FilePicker.platform.pickFiles(
+                              type: FileType.custom,
+                              allowedExtensions: ['csv'],
+                              withData: true,
+                            );
+                            if (result != null) {
+                              final file = result.files.single;
+                              String csvText = '';
+                              if (file.bytes != null) {
+                                csvText = utf8.decode(file.bytes!);
+                              } else if (file.path != null) {
+                                csvText = await File(file.path!).readAsString();
+                              }
+                              if (csvText.isNotEmpty) {
+                                final towerId = file.name.replaceAll(RegExp(r'\.(csv|txt)$', caseSensitive: false), '');
+                                state.importTdr(towerId, csvText);
+                              }
+                            }
+                          },
+                          style: TextButton.styleFrom(alignment: Alignment.centerLeft),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+
+                      // Upload TDR Excel (.xlsx / .xls)
+                      SizedBox(
+                        width: double.infinity,
+                        child: TextButton.icon(
+                          icon: const Icon(Icons.table_chart_rounded, size: 16, color: TacticalTheme.accentGreen),
+                          label: const Text("Upload TDR Excel (.xlsx)", style: TextStyle(fontSize: 12, color: Colors.white70)),
+                          onPressed: () async {
+                            FilePickerResult? result = await FilePicker.platform.pickFiles(
+                              type: FileType.custom,
+                              allowedExtensions: ['xlsx', 'xls'],
+                              withData: true,
+                            );
+                            if (result != null) {
+                              final file = result.files.single;
+                              List<int>? bytes = file.bytes;
+                              if (bytes == null && file.path != null) {
+                                bytes = await File(file.path!).readAsBytes();
+                              }
+                              if (bytes != null) {
+                                final towerId = file.name.replaceAll(RegExp(r'\.(xlsx|xls)$', caseSensitive: false), '');
+                                state.importExcel(bytes, 'tdr', towerId: towerId);
+                              }
+                            }
+                          },
+                          style: TextButton.styleFrom(alignment: Alignment.centerLeft),
+                        ),
+                      ),
+
+                      const SizedBox(height: 16),
                       ElevatedButton(
-                        onPressed: state.selectedTowers.length < 2 
-                            ? null 
+                        onPressed: state.selectedTowers.length < 2
+                            ? null
                             : () => state.runIntersection(),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: TacticalTheme.accentCyan,
@@ -97,7 +160,7 @@ class TdrScreen extends StatelessWidget {
                     children: [
                       Text("Intersection Analysis Results", style: Theme.of(context).textTheme.titleMedium),
                       const SizedBox(height: 16),
-                      
+
                       state.intersectionResults.isEmpty
                           ? Container(
                               padding: const EdgeInsets.symmetric(vertical: 80.0),
