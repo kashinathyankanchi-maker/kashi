@@ -187,19 +187,103 @@ function setMapStyle(style) {
 /**
  * Helper: Parse CSV String
  */
+function detectDelimiter(firstLine) {
+  const delimiters = [',', ';', '\t', '|'];
+  let bestDelimiter = ',';
+  let maxCount = -1;
+  delimiters.forEach(d => {
+    const count = (firstLine.match(new RegExp('\\' + d, 'g')) || []).length;
+    if (count > maxCount) {
+      maxCount = count;
+      bestDelimiter = d;
+    }
+  });
+  return bestDelimiter;
+}
+
+function normalizeCdrRow(row) {
+  const normalized = {
+    Timestamp: '',
+    Caller: '',
+    Recipient: '',
+    Duration_Sec: '0',
+    Type: 'Voice',
+    Cell_Tower_ID: 'TWR-Unknown',
+    IMEI: 'N/A',
+    IMSI: 'N/A'
+  };
+
+  const keys = Object.keys(row);
+  const findVal = (synonyms) => {
+    const matchingKey = keys.find(k => {
+      const cleanK = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+      return synonyms.some(syn => cleanK === syn.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    });
+    return matchingKey ? row[matchingKey] : null;
+  };
+
+  normalized.Timestamp = findVal(['timestamp', 'datetime', 'date_time', 'date time', 'date', 'time', 'call_time', 'call date', 'calldate', 'setup_time', 'start_time', 'start time']) || '';
+  normalized.Caller = findVal(['caller', 'calling_number', 'calling number', 'calling', 'caller_num', 'src', 'source', 'source_number', 'from', 'a_number', 'msisdn_a', 'msisdn']) || '';
+  normalized.Recipient = findVal(['recipient', 'recipient_number', 'recipient number', 'dialed_number', 'dialed number', 'dialled_number', 'dialled number', 'dst', 'destination', 'dest', 'to', 'b_number', 'msisdn_b']) || '';
+  normalized.Duration_Sec = findVal(['duration_sec', 'duration sec', 'duration', 'duration_seconds', 'duration seconds', 'duration_min', 'duration(sec)', 'call_duration', 'call duration']) || '0';
+  normalized.Type = findVal(['type', 'call_type', 'call type', 'event_type', 'event type', 'sms/call', 'direction']) || 'Voice';
+  normalized.Cell_Tower_ID = findVal(['cell_tower_id', 'cell tower id', 'tower_id', 'tower id', 'cell_id', 'cell id', 'cgi', 'lac', 'location', 'site_id', 'site id', 'tower', 'cell']) || 'TWR-Unknown';
+  normalized.IMEI = findVal(['imei', 'imei_number', 'device_imei']) || 'N/A';
+  normalized.IMSI = findVal(['imsi', 'imsi_number', 'sim_imsi']) || 'N/A';
+
+  if (!normalized.Timestamp) {
+    const fallbackKey = keys.find(k => k.toLowerCase().includes('date') || k.toLowerCase().includes('time'));
+    if (fallbackKey) normalized.Timestamp = row[fallbackKey];
+  }
+  if (!normalized.Caller) {
+    const fallbackKey = keys.find(k => k.toLowerCase().includes('call') || k.toLowerCase().includes('from') || k.toLowerCase().includes('src'));
+    if (fallbackKey) normalized.Caller = row[fallbackKey];
+  }
+  if (!normalized.Recipient) {
+    const fallbackKey = keys.find(k => k.toLowerCase().includes('recip') || k.toLowerCase().includes('to') || k.toLowerCase().includes('dest') || k.toLowerCase().includes('dst'));
+    if (fallbackKey) normalized.Recipient = row[fallbackKey];
+  }
+
+  return normalized;
+}
+
+function normalizeTdrRow(row) {
+  const normalized = {
+    Timestamp: '',
+    Phone_Number: '',
+    IMSI: 'N/A',
+    Signal_DBm: '-70'
+  };
+
+  const keys = Object.keys(row);
+  const findVal = (synonyms) => {
+    const matchingKey = keys.find(k => {
+      const cleanK = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+      return synonyms.some(syn => cleanK === syn.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    });
+    return matchingKey ? row[matchingKey] : null;
+  };
+
+  normalized.Timestamp = findVal(['timestamp', 'datetime', 'date_time', 'date time', 'date', 'time', 'call_time']) || '';
+  normalized.Phone_Number = findVal(['phone_number', 'phone number', 'phone', 'number', 'mobile', 'msisdn']) || '';
+  normalized.IMSI = findVal(['imsi', 'imsi_number']) || 'N/A';
+  normalized.Signal_DBm = findVal(['signal_dbm', 'signal dbm', 'signal', 'power', 'dbm']) || '-70';
+
+  return normalized;
+}
+
 function parseCSV(text) {
   const lines = text.split(/\r\n|\n/);
   if (lines.length === 0 || lines[0].trim() === '') return [];
   
-  const headers = lines[0].split(',').map(h => h.trim().replace(/^["']|["']$/g, ''));
+  const delimiter = detectDelimiter(lines[0]);
+  const headers = lines[0].split(delimiter).map(h => h.trim().replace(/^["']|["']$/g, ''));
   const results = [];
   
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) continue;
     
-    // Parse commas while respecting quotes
-    let row = [];
     let insideQuote = false;
     let entries = [];
     let currentEntry = '';
@@ -207,7 +291,7 @@ function parseCSV(text) {
     for (let char of line) {
       if (char === '"' || char === "'") {
         insideQuote = !insideQuote;
-      } else if (char === ',' && !insideQuote) {
+      } else if (char === delimiter && !insideQuote) {
         entries.push(currentEntry.trim());
         currentEntry = '';
       } else {
@@ -221,7 +305,6 @@ function parseCSV(text) {
     const obj = {};
     headers.forEach((header, index) => {
       let val = entries[index] || '';
-      // Remove enclosing quotes
       val = val.replace(/^["']|["']$/g, '');
       obj[header] = val;
     });
@@ -231,9 +314,6 @@ function parseCSV(text) {
   return results;
 }
 
-/**
- * Handle File Uploads (CDR, TDR, SDR)
- */
 function handleCsvUpload(event, type) {
   const file = event.target.files[0];
   if (!file) return;
@@ -249,7 +329,7 @@ function handleCsvUpload(event, type) {
     }
 
     if (type === 'cdr') {
-      state.cdrRecords = parsed;
+      state.cdrRecords = parsed.map(normalizeCdrRow);
       document.getElementById('cdr-file-status').innerHTML = `✓ loaded <strong>${parsed.length}</strong> calls`;
       processCdrData();
     } else if (type === 'sdr') {
@@ -259,7 +339,7 @@ function handleCsvUpload(event, type) {
     } else if (type === 'tdr') {
       // Create a simulated tower ID from filename or count
       const towerId = file.name.split('.')[0] || `TWR-${Math.floor(Math.random() * 1000)}`;
-      state.tdrData[towerId] = parsed;
+      state.tdrData[towerId] = parsed.map(normalizeTdrRow);
       document.getElementById('tdr-file-status').innerHTML = `✓ loaded tower dump <strong>${file.name}</strong> (${parsed.length} records)`;
       buildTowerIntersectionCheckboxes();
     } else if (type === 'tower-registry') {
@@ -1125,32 +1205,32 @@ function parseCdrFromText(text) {
   const lines = text.split('\n');
   const records = [];
   
-  // Date time matching: YYYY-MM-DD HH:MM:SS, DD-MM-YYYY HH:MM, etc., with optional seconds and AM/PM
-  const dateRegex = /\b\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[APap][Mm])?\b/;
-  
-  // Phone numbers matching (at least 7 to 15 digits, optional + prefix, allowing hyphens/spaces)
-  const phoneRegex = /\+?\b\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b|\+?\b\d{10,15}\b/g;
+  // Date time matching with wide format support
+  const datePattern = /\b\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\b|\b\d{1,2}[-/.\s](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-/.\s]\d{2,4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-/.\s]\d{1,2}[-,/.\s]+\d{2,4}\b/i;
+  const timePattern = /\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*[APap][Mm])?\b/;
+  const candidatePattern = /\+?[\d\s-]{7,20}/g;
 
   lines.forEach(line => {
     const trimmed = line.trim();
     if (!trimmed) return;
     
-    // Look for Date/Time stamp
-    const dateMatch = trimmed.match(dateRegex);
-    if (!dateMatch) return;
+    // Look for Date/Time matches
+    const dateMatch = trimmed.match(datePattern);
+    const timeMatch = trimmed.match(timePattern);
+    if (!dateMatch || !timeMatch) return;
     
-    const timestamp = dateMatch[0];
+    const timestamp = `${dateMatch[0]} ${timeMatch[0]}`;
     
-    // Find all phone numbers in the line
-    const phones = trimmed.match(phoneRegex) || [];
-    if (phones.length === 0) return;
+    // Strip date/time from phone matching string to prevent collision
+    let lineForPhones = trimmed.replace(dateMatch[0], ' ').replace(timeMatch[0], ' ');
     
-    // Filter out IMEI/IMSI numbers (typically 15-16 digits)
+    const candidates = lineForPhones.match(candidatePattern) || [];
     const cleanPhones = [];
-    phones.forEach(p => {
-      const digits = p.replace(/\D/g, ''); // get digits only
+    
+    candidates.forEach(c => {
+      const digits = c.replace(/\D/g, '');
       if (digits.length >= 7 && digits.length <= 14) {
-        cleanPhones.push(p.trim());
+        cleanPhones.push(c.trim());
       }
     });
     
@@ -1165,11 +1245,10 @@ function parseCdrFromText(text) {
     if (durationWordMatch) {
       durationSec = parseInt(durationWordMatch[1]);
     } else {
-      // Find any small number on the line that isn't part of the date or phone
-      const possibleNums = trimmed.match(/\b\d{1,4}\b/g) || [];
+      const possibleNums = lineForPhones.match(/\b\d{1,4}\b/g) || [];
       for (let num of possibleNums) {
         const parsedNum = parseInt(num);
-        if (parsedNum > 0 && parsedNum < 7200 && !timestamp.includes(num)) {
+        if (parsedNum > 0 && parsedNum < 7200) {
           durationSec = parsedNum;
           break;
         }
@@ -1188,7 +1267,6 @@ function parseCdrFromText(text) {
     if (towerMatch) {
       towerId = towerMatch[0];
     } else {
-      // Search for any known tower names if present
       if (typeof MOCK_DATA !== 'undefined') {
         const tKeys = Object.keys(MOCK_DATA.towerRegistry);
         for (let key of tKeys) {
